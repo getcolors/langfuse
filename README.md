@@ -1,7 +1,7 @@
 # langfuse
 
-A green Package Skill for self-hosted [Langfuse](https://langfuse.com) v4
-on six Vultr machines in one VPC: a self-hosted **Neon** storage tier for
+A tri-colour Package Skill (green, red, blue) for self-hosted
+[Langfuse](https://langfuse.com) v4 on six Vultr machines in one VPC: a self-hosted **Neon** storage tier for
 Postgres, a **Redis** host, three **ClickHouse** replicas with their own
 Keeper quorum, and the application host running `langfuse-web`,
 `langfuse-worker` and Caddy behind a Cloudflare-proxied name. Cloudflare R2
@@ -40,11 +40,18 @@ on the live build:
 
 ## Install
 
+Three implementations of one model — Clojure/Babashka, TypeScript/Bun,
+Python/uv — rendering byte-identical output. Pick one:
+
 ```sh
 npx skills add getcolors/langfuse
-cp .agents/skills/package-langfuse-green/green ./green
+cp .agents/skills/package-langfuse-green/green ./green   # or -red/red, or -blue/blue
 chmod +x green
 ```
+
+`./red` and `./blue` take the same verbs and the same `colors.yml`, and
+`scripts/parity.sh` is what makes "the same" a checked claim rather than an
+intention: both fixtures through all three colours, diffed byte for byte.
 
 The root `green` is a **copy** of the payload, not a symlink. `npx skills
 update -p` rewrites the payload and leaves the copy alone; copy it again after
@@ -214,18 +221,24 @@ the machines on purpose.
 ## Development
 
 ```sh
-bb test                    # validator, topology, ssh config, tools, workflow
-bb golden                  # two fixtures: keygen and ssh-keypair opt-out
-bb golden:accept           # only after reading the diff
-bb syntax                  # ansible-playbook --syntax-check on the rendered tree
-./scripts/launcher.sh      # the payload, end to end from a copy
-./green build              # against the package's own colors.yml
+cd green && bb test        # validator, topology, ssh config, tools, workflow
+cd red   && bun test && bun run typecheck
+cd blue  && uv run pytest
+cd green && bb golden      # green, two fixtures: keygen and ssh-keypair opt-out
+cd green && bb golden:accept   # only after reading the diff
+cd green && bb syntax      # ansible-playbook --syntax-check on the rendered tree
+./scripts/parity.sh        # three colours, two fixtures, byte for byte
+./scripts/launcher.sh      # the three payloads, and green end to end from a copy
+cd green && ./green build  # against the package's own colors.yml
 ```
 
-`LANGFUSE_LIB_ROOT=/path/to/langfuse` points a deployment's launcher at this
-working tree; `GREEN_LIB_ROOT` and `ONCE_LIB_ROOT` do the same for the SDK
-and ONCE. `bb pin` stamps the payload from a clean, pushed HEAD. The neon pin
-lives in `deps.edn` alone.
+`LANGFUSE_LIB_ROOT=/path/to/langfuse` (the repository root) points a
+deployment's launcher of any colour at this working tree; `GREEN_LIB_ROOT`
+and `ONCE_LIB_ROOT` do the same for the SDK and ONCE. `cd green && bb pin`
+stamps all three payloads from a clean, pushed HEAD. The neon pin is recorded
+in four places — `green/deps.edn`, `red/package.json`, `blue/pyproject.toml`
+and the red payload's `PINS` — and `scripts/launcher.sh` fails when they
+disagree.
 
 ## Licence
 

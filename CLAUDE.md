@@ -6,7 +6,7 @@ file covers only what is specific to `langfuse`.
 
 ## What this is
 
-A green-only Package Skill: self-hosted Langfuse v4 on six Vultr machines in
+A tri-colour Package Skill (green, red, blue): self-hosted Langfuse v4 on six Vultr machines in
 one VPC — a Neon storage tier, Redis, three ClickHouse replicas with Keeper,
 and the application host behind Caddy and Cloudflare. The first consumer is
 `../langfuse-vultr`. `plans/0001-langfuse-v1.md` is the locked plan and its
@@ -15,7 +15,7 @@ review log is the argument; code and tests are authoritative.
 ## Two things to understand before anything else
 
 **The Neon tier is rendered from a pin, the ClickHouse tier is owned here.**
-`deps.edn` SHA-pins `getcolors/neon` and `tools/neon-specs` renders twelve of
+`green/deps.edn` SHA-pins `getcolors/neon` and `tools/neon-specs` renders twelve of
 its templates into a `neon/` subdirectory of the ansible stage — never copied,
 never edited, and `colors.yml` speaks neon's key vocabulary (`neon-r2-bucket`,
 `neon-tenant-id`, …) for exactly that reason. The only thing this package
@@ -87,17 +87,32 @@ render `/home/build-placeholder/.ssh/<profile>` rather than reading `~/.ssh`.
 
 ## Commands
 
+The three implementations live in the tri-colour layout, matching `n8n`
+and `neon`: canonical Clojure in `green/`, TypeScript/Bun in `red/`,
+Python/uv in `blue/`. Green is canonical: a behavioural change lands in all
+three colours in the same commit and passes `scripts/parity.sh`, which
+renders both fixtures through every colour and diffs the trees — and the
+colour template trees (`red/resources`, blue's embedded `resources/`) —
+byte for byte. The neon subtree is the exception: never copied, rendered by
+each colour out of its own SHA-pinned neon dependency. Fixtures and goldens
+are shared at the repository root (`test/fixtures/`, `test/resources/golden/`)
+with symlinks from `green/test/`. Each colour dir holds a launcher symlink to
+its skill payload.
+
 ```sh
-bb test
-bb golden                  # two fixtures: keygen and opt-out
-bb golden:accept           # only after reading the diff
-bb syntax                  # offline ansible-playbook --syntax-check
-./scripts/launcher.sh
-./green build
-./green create --dry-run
-./green create             # requires explicit authorization
-./green rehearse           # against a live deployment
-./green delete             # guarded and destructive
+cd green && bb test
+cd green && bb golden      # two fixtures: keygen and opt-out
+cd green && bb golden:accept   # only after reading the diff
+cd green && bb syntax      # offline ansible-playbook --syntax-check
+cd red && bun test && bun run typecheck
+cd blue && uv run pytest
+./scripts/parity.sh        # three colours, two fixtures, byte for byte
+./scripts/launcher.sh      # from the repository root
+cd green && ./green build
+cd green && ./green create --dry-run
+cd green && ./green create # requires explicit authorization
+cd green && ./green rehearse   # against a live deployment
+cd green && ./green delete # guarded and destructive
 ```
 
 Never read `.envrc.private`, edit `.colors/`, export `COLORS_PAR_PROFILE`, or
@@ -106,11 +121,18 @@ must not touch `~/.ssh`.
 
 ## Coupling
 
-`deps.edn` pins Green, ONCE (never below `bc06f2f`) and neon. Use
-`GREEN_LIB_ROOT`, `ONCE_LIB_ROOT` and `LANGFUSE_LIB_ROOT` for working-tree
+The package pins Green, ONCE (never below `bc06f2f`) and neon in
+`green/deps.edn`, the Red SDK, `package-once-red` and `package-neon-red` in
+`red/package.json`, and the Blue SDK, `package-once-blue` and
+`package-neon-blue` in `blue/pyproject.toml`. All three colours pin ONCE and
+neon at the **same rev**; `scripts/launcher.sh` checks the neon pin across
+`green/deps.edn`, `red/package.json`, `blue/pyproject.toml` and the red
+payload's `PINS`, and `bb pin` writes only this package's own SHA, so a neon
+bump is four hand edits. Use `GREEN_LIB_ROOT`, `ONCE_LIB_ROOT` and
+`LANGFUSE_LIB_ROOT` (the repository root, for every colour) for working-tree
 development; there is no `NEON_LIB_ROOT` — a neon change means moving the
-pin. `bb pin` stamps the payload from a clean pushed HEAD; deployment
-launchers are copies, not symlinks.
+pin. `cd green && bb pin` stamps all three payloads from a clean pushed HEAD;
+deployment launchers are copies, not symlinks.
 
 ## Documentation
 

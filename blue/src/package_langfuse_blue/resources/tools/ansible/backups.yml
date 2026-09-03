@@ -1,0 +1,152 @@
+# Backups that live on the storage host: the Postgres dump every six hours
+# (the FIRST line of recovery for the transactional tier -- a rebuilt
+# safekeeper does not recover its offloaded WAL, so the dump interval is the
+# real RPO) and the nightly additive copy of the media prefix. This host is
+# the one that legitimately holds both R2 tokens: the storage pair through the
+# Neon play, the backup pair through this one.
+- name: Install the storage-host backups
+  hosts: neon
+  become: true
+  gather_facts: false
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service: {daemon_reload: true}
+  tasks:
+    - ansible.builtin.file: {path: "{{ item }}", state: directory, mode: "0755"}
+      loop: [/opt/colors, /etc/colors]
+
+    - name: Install the backup credential
+      ansible.builtin.copy:
+        dest: /etc/colors/backup-r2.env
+        mode: "0600"
+        content: |
+          BACKUP_R2_ACCESS_KEY_ID={{ lookup('env','COLORS_PAR_LANGFUSE_BACKUP_R2_ACCESS_KEY_ID') }}
+          BACKUP_R2_SECRET_ACCESS_KEY={{ lookup('env','COLORS_PAR_LANGFUSE_BACKUP_R2_SECRET_ACCESS_KEY') }}
+      no_log: true
+
+    # The Langfuse storage credential, for the media archive's SOURCE. Distinct
+    # from the Neon pair neon's play installs, so a deployment that splits the
+    # two buckets reads media with the right token.
+    - name: Install the storage credential for the media archive
+      ansible.builtin.copy:
+        dest: /etc/colors/store-r2.env
+        mode: "0600"
+        content: |
+          STORE_R2_ACCESS_KEY_ID={{ lookup('env','COLORS_PAR_LANGFUSE_STORAGE_R2_ACCESS_KEY_ID') }}
+          STORE_R2_SECRET_ACCESS_KEY={{ lookup('env','COLORS_PAR_LANGFUSE_STORAGE_R2_SECRET_ACCESS_KEY') }}
+      no_log: true
+
+    - name: Refuse an empty backup credential
+      ansible.builtin.shell: |
+        set -euo pipefail
+        grep -q '^BACKUP_R2_ACCESS_KEY_ID=..*' /etc/colors/backup-r2.env || { echo "empty backup key id" >&2; exit 1; }
+        grep -q '^BACKUP_R2_SECRET_ACCESS_KEY=..*' /etc/colors/backup-r2.env || { echo "empty backup secret" >&2; exit 1; }
+        grep -q '^STORE_R2_ACCESS_KEY_ID=..*' /etc/colors/store-r2.env || { echo "empty store key id" >&2; exit 1; }
+        grep -q '^STORE_R2_SECRET_ACCESS_KEY=..*' /etc/colors/store-r2.env || { echo "empty store secret" >&2; exit 1; }
+      args: {executable: /bin/bash}
+      changed_when: false
+
+    - name: Install the scripts
+      ansible.builtin.copy: {src: "{{ item.src }}", dest: "{{ item.dest }}", mode: "0755"}
+      loop:
+        - {src: r2-env.sh, dest: /opt/colors/r2-env.sh}
+        - {src: postgres-backup.sh, dest: /usr/local/sbin/postgres-backup}
+        - {src: postgres-restore-check.sh, dest: /usr/local/sbin/postgres-restore-check}
+        - {src: media-backup.sh, dest: /usr/local/sbin/media-backup}
+        - {src: neon-monitor.sh, dest: /usr/local/sbin/neon-monitor}
+
+    # The backup credential must not reach live data. Proven, not assumed: a
+    # listing of the storage bucket with the backup token has to be refused.
+    - name: The backup credential cannot read live data
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . /opt/colors/r2-env.sh
+        export RCLONE_CONFIG_PROBE_TYPE=s3 RCLONE_CONFIG_PROBE_PROVIDER=Cloudflare
+        export RCLONE_CONFIG_PROBE_ENDPOINT="$RCLONE_CONFIG_STORE_ENDPOINT" RCLONE_CONFIG_PROBE_REGION="$RCLONE_CONFIG_STORE_REGION"
+        export RCLONE_CONFIG_PROBE_NO_CHECK_BUCKET=true RCLONE_CONFIG_PROBE_NO_HEAD=true
+        export RCLONE_CONFIG_PROBE_ACCESS_KEY_ID="$RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID"
+        export RCLONE_CONFIG_PROBE_SECRET_ACCESS_KEY="$RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY"
+        if rclone lsf "probe:$STORE_BUCKET/$STORE_PREFIX" >/dev/null 2>&1; then
+          echo "the backup credential can READ the live-data bucket; it is not scoped" >&2; exit 1
+        fi
+        echo "backup credential scoped away from live data"
+      args: {executable: /bin/bash}
+      changed_when: false
+      when: r2_credential_sharing is not defined
+
+    - name: Install the timers
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: postgres-backup.service
+          content: |
+            [Unit]
+            Description=Langfuse Postgres backup set
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/postgres-backup
+        - name: postgres-backup.timer
+          content: |
+            [Unit]
+            Description=Langfuse Postgres backup set
+            [Timer]
+            OnCalendar=<{ langfuse-postgres-backup-oncalendar }>
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+        - name: media-backup.service
+          content: |
+            [Unit]
+            Description=Langfuse media archive copy
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/media-backup
+        - name: media-backup.timer
+          content: |
+            [Unit]
+            Description=Langfuse media archive copy
+            [Timer]
+            OnCalendar=<{ langfuse-media-backup-oncalendar }>
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+        - name: neon-monitor.service
+          content: |
+            [Unit]
+            Description=Storage host health check
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/neon-monitor
+        - name: neon-monitor.timer
+          content: |
+            [Unit]
+            Description=Storage host health check
+            [Timer]
+            OnCalendar=*:0/15
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+      notify: Reload systemd
+
+    - name: Enable the timers
+      ansible.builtin.systemd_service: {name: "{{ item }}", enabled: true, state: started, daemon_reload: true}
+      loop: [postgres-backup.timer, media-backup.timer, neon-monitor.timer]
+
+    # A first set now, so the monitor has something to measure and the
+    # rehearsal has something to restore.
+    - name: Take the first Postgres backup set
+      ansible.builtin.command: /usr/local/sbin/postgres-backup
+      register: first_pg
+      changed_when: "'complete' in first_pg.stdout"
+
+    - name: Take the first media archive copy
+      ansible.builtin.command: /usr/local/sbin/media-backup
+      register: first_media
+      changed_when: "'complete' in first_media.stdout"
+
+    - name: Run the monitor once so describe has a result
+      ansible.builtin.command: /usr/local/sbin/neon-monitor
+      changed_when: false
+      failed_when: false

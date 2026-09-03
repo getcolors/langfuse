@@ -1,0 +1,83 @@
+<!--
+  One shard, three replicas, one Keeper voter per node. Derived from the
+  getcolors/clickhouse package's cluster file; every address is resolved from
+  the inventory at converge time rather than fixed here, so a replaced
+  instance re-renders its peers on the next converge.
+
+  The cluster is named `default` because Langfuse's bundled migrations run
+  ON CLUSTER against that name; any other name means disabling automatic
+  migration and applying them by hand.
+-->
+<clickhouse>
+  <listen_host>127.0.0.1</listen_host>
+  <listen_host>{{ vpc_ip }}</listen_host>
+  <http_port><{ clickhouse-http-port }></http_port>
+  <tcp_port><{ clickhouse-native-port }></tcp_port>
+  <interserver_http_port><{ clickhouse-interserver-port }></interserver_http_port>
+  <interserver_http_host>{{ vpc_ip }}</interserver_http_host>
+  <interserver_http_credentials>
+    <user>interserver</user>
+    <password>{{ ch_interserver_secret }}</password>
+  </interserver_http_credentials>
+  <remote_servers>
+    <<{ clickhouse-cluster-name }>>
+      <!-- A cluster secret instead of a password per replica entry: with it,
+           distributed queries run on the remote nodes as the initiating user,
+           so the users file is the one place credentials live. -->
+      <secret>{{ ch_cluster_secret }}</secret>
+      <shard>
+        <internal_replication>true</internal_replication>
+{% for node in clickhouse_nodes %}
+        <replica><host>{{ node.vpc_ip }}</host><port><{ clickhouse-native-port }></port></replica>
+{% endfor %}
+      </shard>
+    </<{ clickhouse-cluster-name }>>
+  </remote_servers>
+  <zookeeper>
+{% for node in clickhouse_nodes %}
+    <node><host>{{ node.vpc_ip }}</host><port><{ clickhouse-keeper-port }></port></node>
+{% endfor %}
+  </zookeeper>
+  <keeper_server>
+    <tcp_port><{ clickhouse-keeper-port }></tcp_port>
+    <server_id>{{ ordinal + 1 }}</server_id>
+    <log_storage_path>/var/lib/clickhouse/coordination/log</log_storage_path>
+    <snapshot_storage_path>/var/lib/clickhouse/coordination/snapshots</snapshot_storage_path>
+    <coordination_settings><operation_timeout_ms>10000</operation_timeout_ms><session_timeout_ms>30000</session_timeout_ms></coordination_settings>
+    <raft_configuration>
+{% for node in clickhouse_nodes %}
+      <server><id>{{ node.ordinal + 1 }}</id><hostname>{{ node.vpc_ip }}</hostname><port><{ clickhouse-raft-port }></port></server>
+{% endfor %}
+    </raft_configuration>
+  </keeper_server>
+  <macros><shard>01</shard><replica>node-{{ ordinal }}</replica></macros>
+  <!-- {uuid} in the path is what makes RESTORE ... AS <other database>
+       collision-free: the restored tables get new UUIDs and therefore fresh
+       Keeper paths. -->
+  <default_replica_path>/clickhouse/tables/{uuid}/{shard}</default_replica_path>
+  <default_replica_name>{replica}</default_replica_name>
+
+  <!-- The six system log tables Langfuse never reads, removed; they have no
+       TTL by default and the profiler writes trace_log continuously.
+       query_log, part_log and error_log stay: v4 reads system.query_log*
+       for migration progress and usage detection, bounded to thirty days
+       through the `ttl` setting rather than an `engine` override: the base
+       config already sets `partition_by` for these tables, and ClickHouse
+       refuses an engine clause beside it. TTL applies when a table is first
+       created. -->
+  <trace_log remove="1"/>
+  <text_log remove="1"/>
+  <opentelemetry_span_log remove="1"/>
+  <asynchronous_metric_log remove="1"/>
+  <metric_log remove="1"/>
+  <latency_log remove="1"/>
+  <query_log>
+    <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
+  </query_log>
+  <part_log>
+    <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
+  </part_log>
+  <error_log>
+    <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
+  </error_log>
+</clickhouse>

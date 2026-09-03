@@ -1,0 +1,67 @@
+# The application tier. Web and worker publish on loopback only -- Caddy is
+# the one service that answers beyond it -- and every credential arrives
+# through the three env files, never as a value here.
+name: langfuse
+services:
+  langfuse-web:
+    image: <{ langfuse-image }>
+    restart: unless-stopped
+    env_file:
+      - /etc/langfuse/langfuse.env
+      - /etc/langfuse/host.env
+      - /etc/langfuse/operator.env
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      # The health endpoint without the database flag: a temporarily
+      # unreachable database must not make Caddy stop routing to a web that is
+      # otherwise up and can tell the client so.
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/public/health').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  langfuse-worker:
+    image: <{ langfuse-worker-image }>
+    restart: unless-stopped
+    env_file:
+      - /etc/langfuse/langfuse.env
+      - /etc/langfuse/host.env
+      - /etc/langfuse/operator.env
+    ports:
+      - "127.0.0.1:3030:3030"
+    healthcheck:
+      # With the stuck-queue flag: a worker whose BullMQ consumers silently
+      # stopped is alive by every other measure. Built-in scheduled jobs keep a
+      # healthy worker busy at least hourly, so the default threshold holds.
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3030/api/health?failIfQueueConsumptionStuck=true').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  caddy:
+    image: <{ caddy-image }>
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    depends_on:
+      langfuse-web:
+        condition: service_healthy
+    volumes:
+      - /etc/langfuse/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,53 @@
+[project]
+name = "package-langfuse-blue"
+version = "0.1.0"
+description = "Blue/Python implementation of the langfuse package"
+requires-python = ">=3.11"
+dependencies = [
+    "blue",
+    "package-once-blue",
+    "package-neon-blue",
+]
+
+[tool.uv.sources]
+blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
+# bc06f2f is where ONCE moved the machine keypair into the operator's ~/.ssh;
+# this package's SSH behaviour is that module, so the pin cannot go below it.
+package-once-blue = { git = "https://github.com/getcolors/once.git", subdirectory = "blue", rev = "759eb0311b4bdf881eab813cfe5d00f76b9310cc" }
+# The whole storage tier. This package renders neon's Ansible templates
+# straight out of the installed distribution — blue ships them inside
+# `package_neon_blue/resources/` — so `compose.yml`, `main.yml`,
+# `pageserver.toml`, `identity.toml`, `config.json`, `scramgen.py` and the
+# bootstrap/rotate/smoke/status scripts are never copied here. That is the
+# point: a copy of a tier this subtle drifts, and the drift is silent.
+#
+# The cost is real coupling — bumping this pin can break langfuse. That is
+# deliberate: the goldens render the merged Neon+langfuse tree, so a pin bump
+# shows up as a reviewable diff instead of a surprise on a host. Keep this rev
+# equal to green/deps.edn's.
+#
+# 87c0095 is the commit n8n-vultr verified live on 2026-09-01.
+package-neon-blue = { git = "https://github.com/getcolors/neon.git", subdirectory = "blue", rev = "87c009549a928fdf1f9dc135f9740c3baa5782d7" }
+
+# The ONCE and neon pins above carry their own, older blue pins; without this
+# override the git URLs conflict and uv refuses to resolve. The override makes
+# this package's blue pin the one that wins, the way tools.deps lets the
+# top-level green pin win in green/deps.edn.
+[tool.uv]
+override-dependencies = [
+    "blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09",
+    "package-once-blue @ git+https://github.com/getcolors/once.git@759eb0311b4bdf881eab813cfe5d00f76b9310cc#subdirectory=blue",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[tool.hatch.metadata]
+allow-direct-references = true
+[tool.hatch.build.targets.wheel]
+packages = ["src/package_langfuse_blue"]
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

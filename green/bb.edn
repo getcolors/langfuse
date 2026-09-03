@@ -21,5 +21,7 @@
                  :task (shell "../scripts/golden.sh" "--accept")}
   syntax {:doc "Offline ansible-playbook --syntax-check on the rendered tree"
           :task (shell "../scripts/syntax.sh")}
+  parity {:doc "Render both fixtures through green, red, and blue and diff the trees"
+          :task (shell "../scripts/parity.sh")}
   pin {:doc "Stamp the launcher after a clean pushed commit"
        :task (load-file "tasks/pin.clj")}}}

@@ -1,0 +1,60 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+#
+# Managed by `bb pin` — do not edit by hand, and never invent a SHA.
+#
+# UNPINNED: this payload carries no langfuse pin yet. `bb pin` cannot run until
+# the langfuse repository has been pushed, and stamping rewrites the metadata
+# block above with the git sources. Meanwhile point it at a checkout:
+# LANGFUSE_LIB_ROOT=/path/to/langfuse
+"""Thin launcher for package-langfuse-blue.
+
+This file is both the skill payload and the repository entry point —
+blue/blue in the repository is a symlink to it. It deliberately holds no
+logic of its own: validation, the graph and the steps all live in the
+package-langfuse-blue library, where the test suite reaches them. A copied
+payload is the one place in this project where code cannot be tested, so
+nothing that can live elsewhere should live here.
+"""
+
+import os
+import subprocess
+import sys
+
+UNPINNED_ERROR = """\
+this launcher carries no langfuse pin.
+It has not been stamped by `bb pin`, which cannot run until the langfuse
+repository has been pushed.
+Point it at a checkout meanwhile: LANGFUSE_LIB_ROOT=/path/to/langfuse (the repository root)
+(or run through the repository project: cd langfuse/blue && uv run python -m package_langfuse_blue ...)
+"""
+
+
+def _lib_root_project(root: str) -> str:
+    """The uv project inside a LANGFUSE_LIB_ROOT checkout: the repository
+    root, whose blue/ directory holds the implementation."""
+    if os.path.isfile(os.path.join(root, "pyproject.toml")):
+        return root
+    return os.path.join(root, "blue")
+
+
+def main() -> None:
+    root = os.environ.get("LANGFUSE_LIB_ROOT")
+    if root:
+        result = subprocess.run(
+            ["uv", "run", "--project", _lib_root_project(root),
+             "python", "-m", "package_langfuse_blue", *sys.argv[1:]])
+        raise SystemExit(result.returncode)
+    try:
+        from package_langfuse_blue import exec  # resolvable only once pinned
+    except ImportError:
+        sys.stderr.write(UNPINNED_ERROR)
+        raise SystemExit(2)
+    exec()
+
+
+if __name__ == "__main__":
+    main()

@@ -7,9 +7,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
       - uses: DeLaGuardo/setup-clojure@13.4
         with:
           bb: latest
-      - run: cd green && bb test
-      - run: cd green && bb golden
-      - run: ./scripts/launcher.sh
+      - uses: oven-sh/setup-bun@v2
+      - uses: astral-sh/setup-uv@v6
+      - name: Green tests and goldens
+        run: cd green && bb test && bb golden
+      - name: Red tests and typecheck
+        run: cd red && bun install && bun test && bun run typecheck
+      - name: Blue tests
+        run: cd blue && uv sync && uv run pytest -q
+      - name: Byte parity
+        run: ./scripts/parity.sh
+      - name: Launcher checks
+        run: ./scripts/launcher.sh

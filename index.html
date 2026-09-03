@@ -13,9 +13,9 @@
 <script src="https://rybbit.getcolors.ai/api/script.js" data-site-id="9fb9c41a6d49" defer></script>
 </head>
 <body><main>
-  <p class="eyebrow">GREEN PACKAGE SKILL · VULTR · LANGFUSE</p>
+  <p class="eyebrow">GREEN · RED · BLUE PACKAGE SKILL · VULTR · LANGFUSE</p>
   <h1>Langfuse Package Skill</h1>
-  <p class="lead">A reproducible Green workflow for self-hosted Langfuse v4 on six Vultr machines in one VPC: a self-hosted Neon storage tier, Redis, three ClickHouse replicas with their own Keeper quorum, and the application host behind Caddy and Cloudflare — with Cloudflare R2 holding events, media, Neon's layers and WAL, and the backups.</p>
+  <p class="lead">A reproducible Green, Red, and Blue workflow for self-hosted Langfuse v4 on six Vultr machines in one VPC: a self-hosted Neon storage tier, Redis, three ClickHouse replicas with their own Keeper quorum, and the application host behind Caddy and Cloudflare — with Cloudflare R2 holding events, media, Neon's layers and WAL, and the backups.</p>
 
   <div class="callout"><strong>Separate machines, proven separate.</strong> Langfuse's own guidance is one Docker Compose host for testing or Kubernetes for production. This package is the shape in between: every component Langfuse says should be separate is on its own machine, reachable only from the peer that needs it — and the smoke gate proves a <em>denial</em> as well as the allows.</div>
 
@@ -26,6 +26,7 @@ chmod +x green
 ./green build
 ./green create --dry-run</code></pre>
   <p>Build renders reproducible output and dry-run walks the workflow without provider side effects. Real creation and deletion require explicit authorization.</p>
+  <p>Three implementations of one model — Clojure/Babashka, TypeScript/Bun, Python/uv — take the same verbs and the same <code>colors.yml</code>. Swap <code>package-langfuse-green/green</code> for <code>package-langfuse-red/red</code> or <code>package-langfuse-blue/blue</code>; <code>scripts/parity.sh</code> renders both fixtures through all three and diffs the trees byte for byte.</p>
 
   <h2>Architecture</h2>
   <div class="grid">
