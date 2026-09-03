@@ -36,9 +36,15 @@ psql_admin "CREATE DATABASE $SCRATCH OWNER <{ neon-role }>" >/dev/null
 # the counts below and reach the boot. Only one diagnostic is benign here —
 # the dump carries COMMENT ON EXTENSION plpgsql, which the application role
 # may not own — and every other error line fails the restore.
+rc=0
 docker compose exec -T compute env PGPASSWORD="$role_pw" \
-  pg_restore -w --no-owner --no-acl -h 127.0.0.1 -p <{ neon-compute-port }> -U <{ neon-role }> -d "$SCRATCH" < "$WORK/langfuse.dump" 2>"$WORK/restore.log" || true
+  pg_restore -w --no-owner --no-acl -h 127.0.0.1 -p <{ neon-compute-port }> -U <{ neon-role }> -d "$SCRATCH" < "$WORK/langfuse.dump" 2>"$WORK/restore.log" || rc=$?
+# A nonzero exit is accepted only when EVERY diagnostic is the benign one; a
+# killed or truncated restore that printed nothing recognisable fails here.
 bad=$(grep -E '^pg_restore: (error|warning):' "$WORK/restore.log" | grep -vE 'must be owner of extension|errors ignored on restore' | grep -c . || true)
+if [ "$rc" -ne 0 ] && { [ "${bad:-0}" -gt 0 ] || ! grep -q 'must be owner of extension' "$WORK/restore.log"; }; then
+  echo "postgres-restore-check: pg_restore exited $rc with $bad unexpected error lines:" >&2; grep -E '^pg_restore: (error|warning):' "$WORK/restore.log" | head -5 >&2; exit 1
+fi
 if [ "${bad:-0}" -gt 0 ]; then
   echo "postgres-restore-check: pg_restore reported $bad error lines:" >&2; grep -E '^pg_restore: (error|warning):' "$WORK/restore.log" | head -5 >&2; exit 1
 fi

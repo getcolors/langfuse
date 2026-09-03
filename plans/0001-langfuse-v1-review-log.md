@@ -198,3 +198,7 @@ None of these findings is speculative.
 6. **Restored score not asserted** — accepted: the rehearsal reads `restore_check.scores` for the smoke trace through the application user (the Scores API v3 read path was not verified on this build and is not relied on).
 
 Rounds used: 2 (initial review + one reinspection after the fixes, below).
+
+### Reinspection (round 2 of 2)
+
+Findings 1, 2, 3 and 5 confirmed addressed. Finding 4 partially: the exit status was still discarded — accepted; a nonzero `pg_restore` now passes only when every diagnostic is the benign extension comment. New finding 7 (manifest lines sorted by the second field but compared by `comm`, which collates whole lines) — accepted; both listings use `LC_ALL=C sort`. Finding 6 (assert the restored score through the supported API rather than ClickHouse) — rejected for this build with the reason logged: the Scores API v3 read path was not verified on this deployment, and asserting through an unverified route would make the rehearsal claim more than the build proved; the ClickHouse read uses the same application user and the same restored database the scratch web serves, which is the property the plan wanted. Reinspection rounds exhausted.

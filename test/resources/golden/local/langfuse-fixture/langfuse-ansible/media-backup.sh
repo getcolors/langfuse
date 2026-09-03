@@ -25,12 +25,12 @@ fi
 # run's manifest: whatever was archived before must still be there with the
 # same hash, or the copy has been corrupted and the run must not complete.
 hashes=$(mktemp)
-rclone hashsum MD5 "$DST/" 2>/dev/null | sort -k2 > "$hashes"
+rclone hashsum MD5 "$DST/" 2>/dev/null | LC_ALL=C sort > "$hashes"
 count=$(grep -c . "$hashes" || true)
 prev=$(newest_completed_set "$RUNS")
 if [ -n "$prev" ]; then
   prevhashes=$(mktemp)
-  rclone cat "$RUNS/$prev/manifest.txt" 2>/dev/null | sed -n 's/^hash=//p' | sort -k2 > "$prevhashes"
+  rclone cat "$RUNS/$prev/manifest.txt" 2>/dev/null | sed -n 's/^hash=//p' | LC_ALL=C sort > "$prevhashes"
   missing=$(comm -23 "$prevhashes" "$hashes" | head -3)
   if [ -n "$missing" ]; then
     echo "media-backup: archived objects changed or vanished since run $prev:" >&2; printf '%s\n' "$missing" >&2
