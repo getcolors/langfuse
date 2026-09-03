@@ -1,0 +1,289 @@
+# The application host: langfuse-web, langfuse-worker and Caddy, against the
+# three tiers the earlier plays converged.
+#
+# Every credential the containers see arrives through one of three env files
+# and never as a value in the Compose file:
+#   langfuse.env  -- rendered non-secrets: addresses, buckets, prefixes, init ids
+#   host.env      -- the passwords the OTHER hosts generated (read from them
+#                    with slurp, held as facts, written here) plus this host's
+#                    own generated NEXTAUTH_SECRET and project keys
+#   operator.env  -- the operator's credentials, as lookup('env') expressions
+#                    Ansible resolves at execution time
+- name: Install Langfuse
+  hosts: app
+  become: true
+  gather_facts: false
+  handlers:
+    - name: Bring up the application tier
+      ansible.builtin.command: docker compose up -d
+      args: {chdir: /opt/langfuse}
+    - name: Reload Caddy
+      ansible.builtin.command: docker compose restart caddy
+      args: {chdir: /opt/langfuse}
+    - name: Reload systemd
+      ansible.builtin.systemd_service: {daemon_reload: true}
+  tasks:
+    - name: Resolve the peers
+      ansible.builtin.set_fact:
+        neon_host: "{{ groups['neon'][0] }}"
+        redis_host: "{{ groups['redis'][0] }}"
+        ch0_host: "{{ groups['clickhouse'] | map('extract', hostvars) | selectattr('ordinal', 'equalto', 0) | map(attribute='inventory_hostname') | first }}"
+        clickhouse_nodes: "{{ groups['clickhouse'] | map('extract', hostvars) | sort(attribute='ordinal') | list }}"
+    - ansible.builtin.set_fact:
+        neon_vpc_ip: "{{ hostvars[neon_host].vpc_ip }}"
+        redis_vpc_ip: "{{ hostvars[redis_host].vpc_ip }}"
+        ch0_vpc_ip: "{{ hostvars[ch0_host].vpc_ip }}"
+
+    - name: Install Docker and the client tools the gates use
+      ansible.builtin.apt:
+        name: [docker.io, docker-compose-v2, postgresql-client, rclone, jq, curl, openssl, uuid-runtime]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - ansible.builtin.systemd_service: {name: docker, enabled: true, state: started}
+    - ansible.builtin.file: {path: "{{ item.path }}", state: directory, mode: "{{ item.mode }}"}
+      loop:
+        - {path: /opt/langfuse, mode: "0755"}
+        - {path: /opt/colors, mode: "0755"}
+        - {path: /etc/langfuse, mode: "0755"}
+        - {path: /etc/langfuse/secrets, mode: "0700"}
+
+    # Generated here, create-once. NEXTAUTH_SECRET is disposable (losing it ends
+    # sessions and nothing else). The project keys are what headless init
+    # registers for the initial project; Langfuse stores them hashed, so the
+    # plaintext exists only in these files and is deliberately NOT escrowed --
+    # after an app-host rebuild the operator logs in with the operator-held
+    # password and mints new keys.
+    - name: Generate the host-owned secrets once
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        case "{{ item.name }}" in
+          nextauth_secret) openssl rand -base64 32 > /etc/langfuse/secrets/{{ item.name }} ;;
+          project_public_key) printf 'pk-lf-%s\n' "$(uuidgen)" > /etc/langfuse/secrets/{{ item.name }} ;;
+          project_secret_key) printf 'sk-lf-%s\n' "$(uuidgen)" > /etc/langfuse/secrets/{{ item.name }} ;;
+        esac
+      args: {creates: "/etc/langfuse/secrets/{{ item.name }}", executable: /bin/bash}
+      loop:
+        - {name: nextauth_secret}
+        - {name: project_public_key}
+        - {name: project_secret_key}
+
+    - name: Read the secrets generated on this host
+      ansible.builtin.slurp: {src: "/etc/langfuse/secrets/{{ item }}"}
+      register: own_secret_files
+      loop: [nextauth_secret, project_public_key, project_secret_key]
+      no_log: true
+
+    # The three passwords the other hosts generated, read where they live.
+    # slurp executes on the delegated host; the bytes come back as a fact and
+    # are written into host.env below. An Ansible lookup could not do this --
+    # lookups execute on the controller, where none of these files exist.
+    - name: Read the Neon role password from the storage host
+      ansible.builtin.slurp: {src: /etc/neon/secrets/neon_role_password}
+      delegate_to: "{{ neon_host }}"
+      register: neon_pw_file
+      no_log: true
+    - name: Read the Redis password from the cache host
+      ansible.builtin.slurp: {src: /etc/redis/secrets/password}
+      delegate_to: "{{ redis_host }}"
+      register: redis_pw_file
+      no_log: true
+    - name: Read the ClickHouse password from node 0
+      ansible.builtin.slurp: {src: /etc/clickhouse-secrets/langfuse_password}
+      delegate_to: "{{ ch0_host }}"
+      register: ch_pw_file
+      no_log: true
+
+    - name: Hold the secrets as facts
+      ansible.builtin.set_fact:
+        nextauth_secret: "{{ (own_secret_files.results[0].content | b64decode) | trim }}"
+        project_public_key: "{{ (own_secret_files.results[1].content | b64decode) | trim }}"
+        project_secret_key: "{{ (own_secret_files.results[2].content | b64decode) | trim }}"
+        neon_role_password: "{{ (neon_pw_file.content | b64decode) | trim }}"
+        redis_password: "{{ (redis_pw_file.content | b64decode) | trim }}"
+        ch_langfuse_password: "{{ (ch_pw_file.content | b64decode) | trim }}"
+      no_log: true
+
+    - name: Refuse to continue on an empty secret
+      ansible.builtin.assert:
+        that:
+          - nextauth_secret | length > 0
+          - project_public_key | length > 8
+          - project_secret_key | length > 8
+          - neon_role_password | length > 0
+          - redis_password | length > 0
+          - ch_langfuse_password | length > 0
+        fail_msg: a generated secret is empty; refusing to render an environment that cannot authenticate
+        quiet: true
+
+    - name: Install the host-side environment
+      ansible.builtin.copy:
+        dest: /etc/langfuse/host.env
+        mode: "0600"
+        content: |
+          DATABASE_URL=postgresql://<{ neon-role }>:{{ neon_role_password }}@{{ neon_vpc_ip }}:<{ neon-compute-port }>/<{ neon-database }>
+          CLICKHOUSE_PASSWORD={{ ch_langfuse_password }}
+          REDIS_AUTH={{ redis_password }}
+          NEXTAUTH_SECRET={{ nextauth_secret }}
+          LANGFUSE_INIT_PROJECT_PUBLIC_KEY={{ project_public_key }}
+          LANGFUSE_INIT_PROJECT_SECRET_KEY={{ project_secret_key }}
+      no_log: true
+      notify: Bring up the application tier
+
+    # The operator's credentials, from the controller's environment. `content:`
+    # IS templated (module arguments are), unlike a `src:` file copy. They
+    # reach this host and nowhere else: not .colors/, not a golden, not git.
+    - name: Install the operator environment
+      ansible.builtin.copy:
+        dest: /etc/langfuse/operator.env
+        mode: "0600"
+        content: |
+          SALT={{ lookup('env','COLORS_PAR_LANGFUSE_SALT') }}
+          ENCRYPTION_KEY={{ lookup('env','COLORS_PAR_LANGFUSE_ENCRYPTION_KEY') }}
+          LANGFUSE_INIT_USER_PASSWORD={{ lookup('env','COLORS_PAR_LANGFUSE_INIT_USER_PASSWORD') }}
+          LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID={{ lookup('env','COLORS_PAR_LANGFUSE_STORAGE_R2_ACCESS_KEY_ID') }}
+          LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY={{ lookup('env','COLORS_PAR_LANGFUSE_STORAGE_R2_SECRET_ACCESS_KEY') }}
+          LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID={{ lookup('env','COLORS_PAR_LANGFUSE_STORAGE_R2_ACCESS_KEY_ID') }}
+          LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY={{ lookup('env','COLORS_PAR_LANGFUSE_STORAGE_R2_SECRET_ACCESS_KEY') }}
+          LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID={{ lookup('env','COLORS_PAR_LANGFUSE_STORAGE_R2_ACCESS_KEY_ID') }}
+          LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY={{ lookup('env','COLORS_PAR_LANGFUSE_STORAGE_R2_SECRET_ACCESS_KEY') }}
+      no_log: true
+      notify: Bring up the application tier
+
+    - name: Install the rendered environment
+      ansible.builtin.template: {src: langfuse.env, dest: /etc/langfuse/langfuse.env, mode: "0644"}
+      notify: Bring up the application tier
+
+    - name: Refuse to converge on an empty or unrendered environment
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for kv in DATABASE_URL CLICKHOUSE_PASSWORD REDIS_AUTH NEXTAUTH_SECRET LANGFUSE_INIT_PROJECT_PUBLIC_KEY LANGFUSE_INIT_PROJECT_SECRET_KEY; do
+          grep -q "^${kv}=..*" /etc/langfuse/host.env || { echo "empty $kv" >&2; exit 1; }
+        done
+        for kv in SALT ENCRYPTION_KEY LANGFUSE_INIT_USER_PASSWORD LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY; do
+          grep -q "^${kv}=..*" /etc/langfuse/operator.env || { echo "empty $kv" >&2; exit 1; }
+        done
+        # An unrendered template expression in an env file makes the container
+        # authenticate with that literal string. The pattern is built with
+        # printf octal escapes so the two opening braces never appear literally
+        # in this task: Ansible counts brace pairs across the whole block.
+        pat=$(printf '\173\173')
+        grep -q "$pat" /etc/langfuse/host.env /etc/langfuse/operator.env /etc/langfuse/langfuse.env \
+          && { echo "unrendered template expression in an env file" >&2; exit 1; }
+        exit 0
+      args: {executable: /bin/bash}
+      changed_when: false
+
+    - name: Install the Caddy configuration
+      ansible.builtin.copy: {src: Caddyfile, dest: /etc/langfuse/Caddyfile, mode: "0644"}
+      notify: Reload Caddy
+
+    - name: Install the Compose file
+      ansible.builtin.copy: {src: langfuse-compose.yml, dest: /opt/langfuse/compose.yml, mode: "0644"}
+      notify: Bring up the application tier
+
+    - name: Install the operational scripts
+      ansible.builtin.copy: {src: "{{ item.src }}", dest: "{{ item.dest }}", mode: "0755"}
+      loop:
+        - {src: r2-env.sh, dest: /opt/colors/r2-env.sh}
+        - {src: langfuse-smoke.sh, dest: /usr/local/sbin/langfuse-smoke}
+        - {src: langfuse-credential.sh, dest: /usr/local/sbin/langfuse-credential}
+        - {src: langfuse-status.sh, dest: /usr/local/sbin/langfuse-status}
+        - {src: langfuse-monitor.sh, dest: /usr/local/sbin/langfuse-monitor}
+        - {src: langfuse-rehearsal.sh, dest: /usr/local/sbin/langfuse-rehearsal}
+
+    - ansible.builtin.meta: flush_handlers
+
+    # Desired state must be enforced every run, not only when an input moved:
+    # a container left `created` by an earlier failed health dependency would
+    # otherwise sit there across a converge that reported success.
+    - name: Enforce the running state of the stack
+      ansible.builtin.command: docker compose up -d
+      args: {chdir: /opt/langfuse}
+      register: lf_up
+      changed_when: "'Started' in lf_up.stderr or 'Recreated' in lf_up.stderr"
+      retries: 3
+      delay: 20
+      until: lf_up is succeeded
+
+    # The first boot runs the Postgres and ClickHouse migrations before the
+    # health endpoint answers with the database flag; minutes, not seconds.
+    - name: Wait for langfuse-web with the database reachable
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:3000/api/public/health?failIfDatabaseUnavailable=true"
+        status_code: [200]
+      register: web_health
+      retries: 90
+      delay: 10
+      until: web_health is succeeded
+
+    - name: Wait for langfuse-worker, including its queue consumers
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:3030/api/health?failIfQueueConsumptionStuck=true"
+        status_code: [200]
+      register: worker_health
+      retries: 60
+      delay: 10
+      until: worker_health is succeeded
+
+    - name: Assert the Compose project publishes nothing beyond loopback but Caddy
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cfg=$(docker compose config --format json)
+        python3 - "$cfg" <<'PY'
+        import json, sys
+        c = json.loads(sys.argv[1])
+        svc = set(c.get("services", {}))
+        want = {"langfuse-web", "langfuse-worker", "caddy"}
+        assert want <= svc, f"missing services: {sorted(want - svc)}"
+        for name, s in c["services"].items():
+            for p in s.get("ports", []) or []:
+                host_ip = p.get("host_ip") if isinstance(p, dict) else None
+                if name == "caddy":
+                    continue
+                assert host_ip in ("127.0.0.1", "::1"), f"{name} publishes on {host_ip!r}, expected loopback only"
+        print("compose project ok:", len(svc), "services")
+        PY
+      args: {chdir: /opt/langfuse, executable: /bin/bash}
+      changed_when: false
+
+    # The gates. Installing a smoke script and never invoking it is how a
+    # converge reports success while proving nothing.
+    - name: Run the acceptance gates
+      ansible.builtin.command: /usr/local/sbin/langfuse-smoke
+      register: lf_smoke
+      changed_when: false
+
+    - name: Show the gate results
+      ansible.builtin.debug:
+        msg: "{{ lf_smoke.stdout_lines }}"
+
+    - name: Install the monitor timer
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: langfuse-monitor.service
+          content: |
+            [Unit]
+            Description=Langfuse health check
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/langfuse-monitor
+        - name: langfuse-monitor.timer
+          content: |
+            [Unit]
+            Description=Langfuse health check
+            [Timer]
+            OnCalendar=*:0/15
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+      notify: Reload systemd
+    - ansible.builtin.systemd_service: {name: langfuse-monitor.timer, enabled: true, state: started, daemon_reload: true}
+    - name: Run the monitor once so describe has a result
+      ansible.builtin.command: /usr/local/sbin/langfuse-monitor
+      changed_when: false
+      failed_when: false

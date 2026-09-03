@@ -1,0 +1,260 @@
+# Example desired state for a langfuse deployment. Non-secret values only.
+# Credentials belong in the gitignored .envrc.private as COLORS_PAR_* variables.
+# Never export COLORS_PAR_PROFILE: it selects this deployment's remote state.
+#
+# Required credentials:
+#   Vultr            COLORS_PAR_VULTR_API_KEY
+#   Cloudflare       COLORS_PAR_CLOUDFLARE_API_TOKEN
+#                    (DNS edit rights on the bigconfig.online zone)
+#   state in R2      COLORS_PAR_R2_ACCESS_KEY_ID
+#                    COLORS_PAR_R2_SECRET_ACCESS_KEY
+#                    (the shared tofu-state bucket; reaches no host)
+#   live data in R2  COLORS_PAR_LANGFUSE_STORAGE_R2_ACCESS_KEY_ID
+#                    COLORS_PAR_LANGFUSE_STORAGE_R2_SECRET_ACCESS_KEY
+#                    (Object Read & Write on the langfuse-storage bucket
+#                    ONLY; reaches the Neon host and the app host. .envrc
+#                    maps it onto COLORS_PAR_NEON_R2_*, the names the
+#                    getcolors/neon play reads)
+#   backups in R2    COLORS_PAR_LANGFUSE_BACKUP_R2_ACCESS_KEY_ID
+#                    COLORS_PAR_LANGFUSE_BACKUP_R2_SECRET_ACCESS_KEY
+#                    (Object Read & Write on the langfuse-backup bucket
+#                    ONLY; reaches the Neon host and ClickHouse node 0)
+#   application      COLORS_PAR_LANGFUSE_ENCRYPTION_KEY   (64 hex chars:
+#                                                          openssl rand -hex 32)
+#                    COLORS_PAR_LANGFUSE_SALT             (>= 32 chars:
+#                                                          openssl rand -base64 32)
+#                    COLORS_PAR_LANGFUSE_INIT_USER_PASSWORD (>= 12 chars)
+#                    These three are OPERATOR-HELD ON PURPOSE. A backup
+#                    restored onto a fresh app host is readable only with
+#                    the same ENCRYPTION_KEY and SALT; losing them makes
+#                    every encrypted row and every hashed API key in the
+#                    Postgres dumps unusable. Keep them outside these
+#                    machines. The init password is what logs you in after
+#                    an app-host rebuild, when the generated project keys
+#                    are gone and must be minted again.
+#
+# Everything else is generated on the host that owns it during convergence
+# (create-once under /etc/<service>/secrets/) and is not operator-supplied:
+# the Neon role and cloud_admin passwords, the Redis password, the ClickHouse
+# admin/langfuse/interserver secrets, NEXTAUTH_SECRET, and the headless-init
+# project API keys. Retrieve the project keys over SSH with
+# `sudo langfuse-credential` on the app host; see README.
+
+profile: langfuse-example
+workdir: .colors
+
+provider-compute: vultr
+provider-dns: cloudflare
+provider-backend: r2
+
+# Preserve this guard in committed desired state. Destruction requires an
+# explicitly authorized one-run override; never edit this flag to bypass it.
+compute-prevent-destroy: true
+
+# --- R2 blast radius ----------------------------------------------------------
+#
+# Two dedicated buckets, two scoped tokens, and the OpenTofu state pair
+# reaching no host. Neon layers/WAL and Langfuse events/media share the
+# storage bucket and its token: a compromised app host can therefore delete
+# Neon layers, and the Postgres dumps in the backup bucket (which that host
+# cannot reach) are what bounds that loss. The hardening path is a THIRD
+# bucket and token: point langfuse-s3-bucket at it, supply the pair as
+# COLORS_PAR_LANGFUSE_STORAGE_R2_* and a Neon-only pair as
+# COLORS_PAR_NEON_R2_* in .envrc.private, and re-converge.
+#
+# The package refuses a real create when either the storage or the backup
+# pair equals the state pair unless this key records that the blast radius
+# is accepted. Absent here on purpose: the pairs are split.
+# r2-credential-sharing: shared-accepted
+
+# --- Langfuse -----------------------------------------------------------------
+
+# v4.27.0, released 2026-09-01. docker.langfuse.com fronts Docker Hub; the
+# digests were resolved from both and agree. Web and worker ship together;
+# move the pair together or neither.
+langfuse-image: docker.langfuse.com/langfuse/langfuse:4.27.0@sha256:c9e2cab8469a5d7353e86a3252b02c52ac94ef31288ce2639ee01aabf5e4222b
+langfuse-worker-image: docker.langfuse.com/langfuse/langfuse-worker:4.27.0@sha256:091a85c3c54bf5fff7cc0073a7f35a52861cc0e30d33dd05569fe3ed66b15d8d
+
+# Public hostname. NEXTAUTH_URL bakes it into sessions, invite links and the
+# presigned media URLs SDK clients use, and every instrumented application is
+# configured with it -- change it BEFORE any client exists, not after.
+langfuse-host: langfuse.bigconfig.online
+
+# Headless initialization: the organization, project and owner user that
+# convergence creates on first boot so acceptance can ingest without a
+# browser and the first-run screen is never left unclaimed. The user's
+# password is COLORS_PAR_LANGFUSE_INIT_USER_PASSWORD; the project's API keys
+# are generated on the app host. Re-running is safe: already-present is
+# success, and none of these values can be changed by re-converging.
+langfuse-init-org-id: getcolors
+langfuse-init-org-name: getcolors
+langfuse-init-project-id: langfuse-example
+langfuse-init-project-name: langfuse-example
+langfuse-init-user-email: claude@ululi.it
+langfuse-init-user-name: Claude
+
+# Raw events, media and batch exports in R2. Its own key, defaulting to the
+# Neon bucket below; see the blast-radius note for why you might split it.
+# Prefixes are profile-scoped so one bucket can carry several deployments:
+# <prefix>events/, <prefix>media/, <prefix>exports/.
+langfuse-s3-bucket: langfuse-storage
+langfuse-s3-prefix: langfuse-example/
+
+# The ingestion gate that runs on every converge: this many traces through
+# the public path, all of them queryable within the timeout. Small enough to
+# run every time, large enough to exercise the queue and the worker.
+langfuse-smoke-traces: 200
+langfuse-smoke-timeout-seconds: 120
+
+caddy-image: docker.io/library/caddy:2.11.4@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d
+
+# --- Redis (dedicated host) ---------------------------------------------------
+
+# Langfuse requires Redis >= 7 with maxmemory-policy noeviction (queued jobs
+# must never be evicted) and recommends 7.2 for v4. Append-only persistence
+# on a named volume: a restart keeps queued jobs. Redis is NOT backed up --
+# events accepted but not yet processed at the moment of a Redis LOSS stay
+# in R2 as raw objects, and Langfuse documents no automated replay for them.
+redis-image: docker.io/library/redis:7.2.16@sha256:74566c6910d13ae61e7ce73ebd3127438a1fe805b309b097c323142719ec8a5b
+redis-port: 6379
+
+# --- ClickHouse (three dedicated nodes) ---------------------------------------
+
+# Langfuse v4 requires ClickHouse >= 25.12. This is the current LTS train as
+# served by packages.clickhouse.com/deb on 2026-09-03; the package installs
+# this EXACT version and fails loudly if the repository stops serving it.
+clickhouse-version: 26.3.29.7
+# Named `default` so Langfuse runs its bundled migrations ON CLUSTER without
+# manual steps. One shard, three replicas, one Keeper voter per node; the
+# node count is fixed at three by the validator.
+clickhouse-cluster-name: default
+clickhouse-nodes: 3
+clickhouse-http-port: 8123
+clickhouse-native-port: 9000
+clickhouse-interserver-port: 9009
+clickhouse-keeper-port: 9181
+clickhouse-raft-port: 9234
+
+# --- Neon (dedicated host) ----------------------------------------------------
+
+# Langfuse's Postgres is a self-hosted Neon: a storage broker, a pageserver,
+# one safekeeper, and a Postgres 17 compute node, with layers and WAL in R2.
+# These keys are deliberately named `neon-*`: this deployment renders the
+# getcolors/neon package's own templates off a SHA pin rather than carrying a
+# copy, so it must speak that package's key vocabulary.
+#
+# The verified-good pairing from the neon-vultr and n8n-vultr builds.
+# Upstream cut its last versioned releases in July 2025 and then moved to
+# untagged continuous deployment, so these are the final deliberate release
+# tags of each train. Storage and compute version independently: move both
+# together or neither.
+neon-image: ghcr.io/neondatabase/neon:release-9129@sha256:166022a72bf9983eba96d061d794f4740edbd4c3301e66202c1180acce9a323c
+neon-compute-image: ghcr.io/neondatabase/compute-node-v17:release-compute-9073@sha256:ed6a613231d7026b4df8b00563444b9f33745370a3b3f0a2183e723f460ba974
+neon-pg-version: 17
+
+# Tenant and timeline identities are desired state, not runtime accidents.
+# The R2 prefix plus these ids ARE the database: fixing them here is what
+# makes convergence reconcilable and recovery describable. Non-secret 32-hex
+# identifiers, minted for this deployment.
+neon-tenant-id: 7b3129f7642dfab34fce2a01cb876f6a
+neon-timeline-id: 8072f0b03ca4dae540dd380e8ffbc986
+
+# The database and role convergence creates on the compute node for Langfuse.
+# The role password is generated on the Neon host; cloud_admin keeps its own.
+neon-database: langfuse
+neon-role: langfuse
+
+# Pageserver layers and safekeeper WAL under this deployment's prefix. The
+# bucket must already exist (the scoped token cannot create buckets) and must
+# carry NO lifecycle rules: they would delete live layers and WAL that Neon
+# still references.
+neon-r2-bucket: langfuse-storage
+neon-r2-endpoint: https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com
+neon-r2-region: auto
+neon-r2-prefix: langfuse-example/neon
+
+# --- Backups in R2 ------------------------------------------------------------
+
+# Three sets, all under langfuse-example/ in the backup bucket, all with a
+# completion protocol (incoming -> verified -> manifest -> .complete ->
+# published; restore picks only completed sets):
+#   postgres/   pg_dump every six hours. The FIRST line of recovery for the
+#               transactional tier -- a rebuilt safekeeper does not recover
+#               its offloaded WAL -- so this interval is the real RPO.
+#   clickhouse/ native BACKUP nightly from node 0 through a named collection,
+#               so the token never enters SQL or the query log.
+#   media/      additive copy of the media prefix (never a sync: a deletion
+#               on the live prefix is never mirrored), never pruned.
+# Raw events and exports are NOT backed up: Langfuse treats events/ as a
+# 30-day reprocessing buffer, and ClickHouse is the system of record.
+# Restore pairs a ClickHouse set with the OLDEST Postgres dump completed
+# AFTER it, so Postgres is always the newer snapshot; see README for the
+# consistency semantics that follow.
+langfuse-backup-r2-bucket: langfuse-backup
+langfuse-backup-r2-endpoint: https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com
+langfuse-backup-r2-region: auto
+langfuse-postgres-backup-oncalendar: "*-*-* 00/6:00:00"
+langfuse-clickhouse-backup-oncalendar: "*-*-* 02:30:00"
+langfuse-media-backup-oncalendar: "*-*-* 03:30:00"
+langfuse-backup-retention-days: 7
+# Monitor thresholds: a set older than this fails langfuse-status.
+langfuse-postgres-backup-max-age-hours: 8
+langfuse-clickhouse-backup-max-age-hours: 30
+langfuse-media-backup-max-age-hours: 30
+
+# --- Public DNS and TLS -------------------------------------------------------
+
+# bigconfig.online follows the n8n, SigNoz and AutoMQ precedent for the zone
+# the available Cloudflare token can see. Moving to getcolors.ai needs a token
+# with that zone and an edit to langfuse-host and these two keys.
+cloudflare-zone: bigconfig.online
+cloudflare-record-name: langfuse
+# Serve through the Cloudflare proxy so the origin address is not published.
+# Caddy trusts Cloudflare's ranges, so client addresses come from
+# X-Forwarded-For rather than the edge.
+cloudflare-proxied: true
+
+# --- Vultr --------------------------------------------------------------------
+
+# No vultr-name: per workspace standards/compute-name.md the machines and the
+# firewall groups are named after the profile with a role suffix:
+# langfuse-example-neon, -redis, -app, -clickhouse-0, -1, -2.
+vultr-region: ams
+# Vultr operating systems are numeric ids; 2284 is Ubuntu 24.04 LTS x64.
+vultr-os-id: 2284
+
+# The private network carrying every database connection. Nothing on those
+# ports is published: each role has its own firewall group, and east-west
+# access is granted per peer address, not per subnet.
+vultr-vpc-subnet: 10.50.0.0/24
+
+# Plans, one per role, each at Langfuse's documented minimum for that role.
+# Vultr plan changes are in-place upgrades, so escalation is cheap.
+#   neon:       4 vCPU / 8 GiB -- neon-vultr recorded bootstrap OOM at 4 GiB
+#   redis:      1 vCPU / 2 GiB -- documented minimum 1 CPU / 1.5 GiB
+#   clickhouse: 4 vCPU / 8 GiB -- documented minimum 2 CPU / 8 GiB per node
+#   app:        4 vCPU / 8 GiB -- web 2/4 + worker 2/4 + Caddy
+vultr-plan-neon: vc2-4c-8gb
+vultr-plan-redis: vc2-1c-2gb
+vultr-plan-clickhouse: vc2-4c-8gb
+vultr-plan-app: vc2-4c-8gb
+
+# No vultr-ssh-keys: keygen mode per workspace standards/ssh-keypair.md. The
+# package generates and owns ~/.ssh/langfuse-example and registers ONE account
+# key resource named after the profile, used by all six machines. Setting
+# vultr-ssh-keys here would switch this deployment to opt-out mode.
+
+# SSH is key-only and used for convergence and recovery on every host.
+vultr-ssh-sources:
+  - 0.0.0.0/0
+  - "::/0"
+# HTTP(S) is public on the app host only, and only from Cloudflare's
+# published ranges: `cloudflare` is a symbolic source the package RESOLVES at
+# converge time, recording the resolved set and its checksum under .colors/.
+# Anything else answers nothing on 80/443.
+vultr-http-sources: cloudflare
+
+# --- OpenTofu state backend ---------------------------------------------------
+
+r2-bucket: tofu-state-319271fed8bc6d2d9059362be1165f37-eu
+r2-endpoint: https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com

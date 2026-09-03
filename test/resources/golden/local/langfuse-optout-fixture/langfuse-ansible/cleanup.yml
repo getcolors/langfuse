@@ -1,0 +1,45 @@
+# Delete. Stops every stack and timer on every host, and removes NOTHING in
+# R2: the storage prefix and the backup sets outlive the machines on purpose.
+- name: Stop the application tier
+  hosts: app
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.systemd_service: {name: langfuse-monitor.timer, state: stopped, enabled: false}
+      failed_when: false
+    - ansible.builtin.command: docker compose down
+      args: {chdir: /opt/langfuse}
+      failed_when: false
+
+- name: Stop the storage-host timers
+  hosts: neon
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.systemd_service: {name: "{{ item }}", state: stopped, enabled: false}
+      loop: [postgres-backup.timer, media-backup.timer, neon-monitor.timer]
+      failed_when: false
+
+- import_playbook: neon/cleanup.yml
+
+- name: Stop Redis
+  hosts: redis
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.systemd_service: {name: redis-monitor.timer, state: stopped, enabled: false}
+      failed_when: false
+    - ansible.builtin.command: docker compose down
+      args: {chdir: /opt/redis}
+      failed_when: false
+
+- name: Stop ClickHouse
+  hosts: clickhouse
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.systemd_service: {name: "{{ item }}", state: stopped, enabled: false}
+      loop: [clickhouse-backup.timer, clickhouse-monitor.timer]
+      failed_when: false
+    - ansible.builtin.systemd_service: {name: clickhouse-server, state: stopped}
+      failed_when: false

@@ -1,0 +1,67 @@
+profile: langfuse-fixture
+workdir: WORKDIR
+provider-compute: vultr
+provider-dns: cloudflare
+provider-backend: local
+compute-prevent-destroy: true
+langfuse-image: docker.langfuse.com/langfuse/langfuse:4.27.0@sha256:c9e2cab8469a5d7353e86a3252b02c52ac94ef31288ce2639ee01aabf5e4222b
+langfuse-worker-image: docker.langfuse.com/langfuse/langfuse-worker:4.27.0@sha256:091a85c3c54bf5fff7cc0073a7f35a52861cc0e30d33dd05569fe3ed66b15d8d
+langfuse-host: langfuse.fixture.example
+langfuse-init-org-id: fixture-org
+langfuse-init-org-name: Fixture Org
+langfuse-init-project-id: fixture-project
+langfuse-init-project-name: Fixture Project
+langfuse-init-user-email: operator@fixture.example
+langfuse-init-user-name: Operator
+langfuse-s3-bucket: langfuse-storage-fixture
+langfuse-s3-prefix: langfuse-fixture/
+langfuse-smoke-traces: 200
+langfuse-smoke-timeout-seconds: 120
+caddy-image: docker.io/library/caddy:2.11.4@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d
+redis-image: docker.io/library/redis:7.2.16@sha256:74566c6910d13ae61e7ce73ebd3127438a1fe805b309b097c323142719ec8a5b
+redis-port: 6379
+clickhouse-version: 26.3.29.7
+clickhouse-cluster-name: default
+clickhouse-nodes: 3
+clickhouse-http-port: 8123
+clickhouse-native-port: 9000
+clickhouse-interserver-port: 9009
+clickhouse-keeper-port: 9181
+clickhouse-raft-port: 9234
+neon-image: ghcr.io/neondatabase/neon:release-9129@sha256:166022a72bf9983eba96d061d794f4740edbd4c3301e66202c1180acce9a323c
+neon-compute-image: ghcr.io/neondatabase/compute-node-v17:release-compute-9073@sha256:ed6a613231d7026b4df8b00563444b9f33745370a3b3f0a2183e723f460ba974
+neon-pg-version: 17
+neon-tenant-id: 7b3129f7642dfab34fce2a01cb876f6a
+neon-timeline-id: 8072f0b03ca4dae540dd380e8ffbc986
+neon-database: langfuse
+neon-role: langfuse
+neon-r2-bucket: langfuse-storage-fixture
+neon-r2-endpoint: https://fixture.r2.cloudflarestorage.com
+neon-r2-region: auto
+neon-r2-prefix: langfuse-fixture/neon
+langfuse-backup-r2-bucket: langfuse-backup-fixture
+langfuse-backup-r2-endpoint: https://fixture.r2.cloudflarestorage.com
+langfuse-backup-r2-region: auto
+langfuse-postgres-backup-oncalendar: "*-*-* 00/6:00:00"
+langfuse-clickhouse-backup-oncalendar: "*-*-* 02:30:00"
+langfuse-media-backup-oncalendar: "*-*-* 03:30:00"
+langfuse-backup-retention-days: 7
+langfuse-postgres-backup-max-age-hours: 8
+langfuse-clickhouse-backup-max-age-hours: 30
+langfuse-media-backup-max-age-hours: 30
+cloudflare-zone: fixture.example
+cloudflare-record-name: langfuse
+cloudflare-proxied: true
+vultr-region: ams
+vultr-os-id: 2284
+vultr-vpc-subnet: 10.50.0.0/24
+vultr-plan-neon: vc2-4c-8gb
+vultr-plan-redis: vc2-1c-2gb
+vultr-plan-clickhouse: vc2-4c-8gb
+vultr-plan-app: vc2-4c-8gb
+vultr-ssh-sources:
+  - 0.0.0.0/0
+  - "::/0"
+vultr-http-sources: cloudflare
+r2-bucket: tofu-state-fixture
+r2-endpoint: https://fixture.r2.cloudflarestorage.com

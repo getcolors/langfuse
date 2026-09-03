@@ -1,0 +1,329 @@
+# Three ClickHouse replicas, each with its own Keeper voter, on three hosts.
+#
+# Derived from the getcolors/clickhouse package's cluster and users files and
+# maintained here as this package's own: that package is a Hetzner shape with
+# WireGuard as the client path, Metabase and dbt beside it, and static private
+# addresses baked into its config. Here every address comes from the
+# inventory, the secrets are generated on node 0 and propagated, and the
+# cluster is named `default` because that is the name Langfuse's bundled
+# migrations run ON CLUSTER against.
+- name: Install and configure the ClickHouse cluster
+  hosts: clickhouse
+  become: true
+  gather_facts: false
+  vars:
+    ch_secrets_dir: /etc/clickhouse-secrets
+  handlers:
+    - name: Restart ClickHouse
+      ansible.builtin.systemd_service: {name: clickhouse-server, state: restarted}
+    - name: Reload systemd
+      ansible.builtin.systemd_service: {daemon_reload: true}
+  tasks:
+    - name: Resolve node 0
+      ansible.builtin.set_fact:
+        ch0: "{{ groups['clickhouse'] | map('extract', hostvars) | selectattr('ordinal', 'equalto', 0) | map(attribute='inventory_hostname') | first }}"
+        app_vpc_ip: "{{ hostvars[groups['app'][0]].vpc_ip }}"
+        clickhouse_nodes: "{{ groups['clickhouse'] | map('extract', hostvars) | sort(attribute='ordinal') | list }}"
+
+    - name: Install repository prerequisites
+      ansible.builtin.apt:
+        name: [ca-certificates, curl, gnupg, apt-transport-https]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Install ClickHouse signing key
+      ansible.builtin.get_url:
+        url: https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key
+        dest: /usr/share/keyrings/clickhouse.asc
+        mode: "0644"
+    - name: Configure ClickHouse apt repository
+      ansible.builtin.deb822_repository:
+        name: clickhouse
+        types: [deb]
+        uris: https://packages.clickhouse.com/deb
+        suites: [stable]
+        components: [main]
+        signed_by: /usr/share/keyrings/clickhouse.asc
+        state: present
+    # The EXACT version from desired state. A repository that no longer serves
+    # it fails here, loudly, rather than drifting to whatever is current.
+    - name: Install the exact ClickHouse packages
+      ansible.builtin.apt:
+        name:
+          - "clickhouse-common-static=26.3.29.7"
+          - "clickhouse-client=26.3.29.7"
+          - "clickhouse-server=26.3.29.7"
+        state: present
+        update_cache: true
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: Create the secrets directory
+      ansible.builtin.file: {path: "{{ ch_secrets_dir }}", state: directory, mode: "0700"}
+
+    # Generated on node 0 only, create-once, and never supplied by the operator:
+    # the admin and langfuse passwords, the interserver credential replicas
+    # authenticate part exchange with, and the cluster secret distributed
+    # queries carry so no password has to sit inside remote_servers.
+    - name: Generate the cluster secrets once, on node 0 only
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        openssl rand -hex 24 > {{ ch_secrets_dir }}/{{ item }}
+      args: {creates: "{{ ch_secrets_dir }}/{{ item }}", executable: /bin/bash}
+      loop: [admin_password, langfuse_password, interserver_secret, cluster_secret]
+      when: ordinal == 0
+
+    # Every node reads the same four values from node 0. slurp runs on the
+    # delegated host and hands the bytes back through a fact; nothing is
+    # written to the controller and nothing is rendered into .colors/.
+    - name: Read the cluster secrets from node 0
+      ansible.builtin.slurp:
+        src: "{{ ch_secrets_dir }}/{{ item }}"
+      delegate_to: "{{ ch0 }}"
+      register: ch_secret_files
+      loop: [admin_password, langfuse_password, interserver_secret, cluster_secret]
+      no_log: true
+
+    - name: Hold the cluster secrets as facts
+      ansible.builtin.set_fact:
+        ch_admin_password: "{{ (ch_secret_files.results[0].content | b64decode) | trim }}"
+        ch_langfuse_password: "{{ (ch_secret_files.results[1].content | b64decode) | trim }}"
+        ch_interserver_secret: "{{ (ch_secret_files.results[2].content | b64decode) | trim }}"
+        ch_cluster_secret: "{{ (ch_secret_files.results[3].content | b64decode) | trim }}"
+      no_log: true
+
+    - name: Keep a local copy of the secrets on every node
+      ansible.builtin.copy:
+        dest: "{{ ch_secrets_dir }}/{{ item.name }}"
+        content: "{{ item.value }}\n"
+        mode: "0600"
+      loop:
+        - {name: admin_password, value: "{{ ch_admin_password }}"}
+        - {name: langfuse_password, value: "{{ ch_langfuse_password }}"}
+      no_log: true
+      when: ordinal != 0
+
+    - name: Refuse to continue on an empty secret
+      ansible.builtin.assert:
+        that:
+          - ch_admin_password | length > 0
+          - ch_langfuse_password | length > 0
+          - ch_interserver_secret | length > 0
+          - ch_cluster_secret | length > 0
+        fail_msg: a cluster secret is empty; refusing to render users with no password
+        quiet: true
+
+    - name: Install the cluster configuration
+      ansible.builtin.template:
+        src: clickhouse-config.xml
+        dest: /etc/clickhouse-server/config.d/colors-cluster.xml
+        owner: clickhouse
+        group: clickhouse
+        mode: "0600"
+      no_log: true
+      notify: Restart ClickHouse
+
+    - name: Install the users
+      ansible.builtin.template:
+        src: clickhouse-users.xml
+        dest: /etc/clickhouse-server/users.d/colors-users.xml
+        owner: clickhouse
+        group: clickhouse
+        mode: "0600"
+      no_log: true
+      notify: Restart ClickHouse
+
+    # The backup disk, node 0 only: an S3 disk on the backup bucket whose
+    # credentials live in this root-readable file, so BACKUP and RESTORE
+    # statements name a disk and never a key -- and system.query_log, which is
+    # kept for thirty days, never sees one.
+    - name: Install the backup disk configuration on node 0
+      ansible.builtin.template:
+        src: clickhouse-backup.xml
+        dest: /etc/clickhouse-server/config.d/colors-backup.xml
+        owner: clickhouse
+        group: clickhouse
+        mode: "0600"
+      no_log: true
+      when: ordinal == 0
+      notify: Restart ClickHouse
+
+    - name: Install the backup credential for the host-side scripts on node 0
+      ansible.builtin.copy:
+        dest: /etc/colors/backup-r2.env
+        mode: "0600"
+        content: |
+          BACKUP_R2_ACCESS_KEY_ID={{ lookup('env','COLORS_PAR_LANGFUSE_BACKUP_R2_ACCESS_KEY_ID') }}
+          BACKUP_R2_SECRET_ACCESS_KEY={{ lookup('env','COLORS_PAR_LANGFUSE_BACKUP_R2_SECRET_ACCESS_KEY') }}
+      no_log: true
+      when: ordinal == 0
+
+    - name: Refuse an empty backup credential on node 0
+      ansible.builtin.shell: |
+        set -euo pipefail
+        grep -q '^BACKUP_R2_ACCESS_KEY_ID=..*' /etc/colors/backup-r2.env || { echo "empty backup key id" >&2; exit 1; }
+        grep -q '^BACKUP_R2_SECRET_ACCESS_KEY=..*' /etc/colors/backup-r2.env || { echo "empty backup secret" >&2; exit 1; }
+      args: {executable: /bin/bash}
+      changed_when: false
+      when: ordinal == 0
+
+    - name: Install the operational scripts
+      ansible.builtin.copy: {src: "{{ item.src }}", dest: "{{ item.dest }}", mode: "0755"}
+      loop:
+        - {src: r2-env.sh, dest: /opt/colors/r2-env.sh}
+        - {src: clickhouse-backup.sh, dest: /usr/local/sbin/clickhouse-backup}
+        - {src: clickhouse-restore-check.sh, dest: /usr/local/sbin/clickhouse-restore-check}
+        - {src: clickhouse-monitor.sh, dest: /usr/local/sbin/clickhouse-monitor}
+
+    - name: Apply configuration changes now
+      ansible.builtin.meta: flush_handlers
+
+    - name: Ensure ClickHouse is enabled and running
+      ansible.builtin.systemd_service:
+        name: clickhouse-server
+        enabled: true
+        state: started
+
+    - name: Wait for local ClickHouse health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8123/ping"
+        return_content: true
+      register: clickhouse_ping
+      retries: 30
+      delay: 2
+      until: clickhouse_ping.status == 200
+
+    # --- gates: what a quorum actually looks like ------------------------------
+
+    - name: Every replica sees all three through the cluster
+      ansible.builtin.command:
+        argv: [clickhouse-client, --user, admin, --password, "{{ ch_admin_password }}",
+               --query, "SELECT count() FROM clusterAllReplicas('default', system.one)"]
+      register: replica_count
+      changed_when: false
+      no_log: true
+      retries: 30
+      delay: 3
+      until: replica_count.stdout | trim == '3'
+
+    - name: Keeper holds a quorum
+      ansible.builtin.command:
+        argv: [clickhouse-client, --user, admin, --password, "{{ ch_admin_password }}",
+               --query, "SELECT count() FROM system.zookeeper WHERE path = '/'"]
+      register: keeper_root
+      changed_when: false
+      no_log: true
+      retries: 10
+      delay: 3
+      until: (keeper_root.stdout | trim | int) > 0
+
+    # An authenticated query from node 0 to node 1 through the native port:
+    # the firewall, ufw, and the admin user's network list all have to be
+    # right for this to answer with node 1's own name.
+    - name: Node 0 reaches node 1 with the admin credential
+      ansible.builtin.command:
+        argv: [clickhouse-client, --user, admin, --password, "{{ ch_admin_password }}",
+               --query, "SELECT hostName() FROM remote('{{ clickhouse_nodes[1].vpc_ip }}:9000', system.one, 'admin', '{{ ch_admin_password }}')"]
+      register: cross_node
+      changed_when: false
+      no_log: true
+      when: ordinal == 0
+      failed_when: cross_node.rc != 0 or (cross_node.stdout | trim | length) == 0
+
+    - name: The server timezone is UTC
+      ansible.builtin.command:
+        argv: [clickhouse-client, --user, admin, --password, "{{ ch_admin_password }}", --query, "SELECT timezone()"]
+      register: ch_tz
+      changed_when: false
+      no_log: true
+      failed_when: ch_tz.stdout | trim != 'UTC'
+
+    # Langfuse v4 reads system.query_log*; the table is created lazily on the
+    # first flush, so flush before asking.
+    - name: query_log exists
+      ansible.builtin.shell: |
+        set -euo pipefail
+        clickhouse-client --user admin --password "$(cat {{ ch_secrets_dir }}/admin_password)" --query "SYSTEM FLUSH LOGS"
+        n=$(clickhouse-client --user admin --password "$(cat {{ ch_secrets_dir }}/admin_password)" \
+              --query "SELECT count() FROM system.tables WHERE database = 'system' AND name = 'query_log'")
+        [ "$n" = "1" ] || { echo "system.query_log is absent" >&2; exit 1; }
+      args: {executable: /bin/bash}
+      changed_when: false
+
+    - name: The backup disk is registered on node 0
+      ansible.builtin.command:
+        argv: [clickhouse-client, --user, admin, --password, "{{ ch_admin_password }}",
+               --query, "SELECT count() FROM system.disks WHERE name = 'backups'"]
+      register: backup_disk
+      changed_when: false
+      no_log: true
+      when: ordinal == 0
+      failed_when: backup_disk.stdout | trim != '1'
+
+    # The credential must never enter SQL. The check compares every logged
+    # query against the secret ON THE HOST, so the secret itself is not
+    # passed into a diagnostic query either.
+    - name: No backup credential in the query log
+      ansible.builtin.shell: |
+        set -euo pipefail
+        secret=$(sed -n 's/^BACKUP_R2_SECRET_ACCESS_KEY=//p' /etc/colors/backup-r2.env)
+        clickhouse-client --user admin --password "$(cat {{ ch_secrets_dir }}/admin_password)" --query "SYSTEM FLUSH LOGS"
+        hits=$(clickhouse-client --user admin --password "$(cat {{ ch_secrets_dir }}/admin_password)" \
+                 --query "SELECT query FROM system.query_log FORMAT TSVRaw" | grep -cF -- "$secret" || true)
+        [ "${hits:-0}" = "0" ] || { echo "the backup credential appears in system.query_log ($hits rows)" >&2; exit 1; }
+      args: {executable: /bin/bash}
+      changed_when: false
+      when: ordinal == 0
+
+    - name: Install the timers
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: clickhouse-backup.service
+          content: |
+            [Unit]
+            Description=ClickHouse backup set to R2
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/clickhouse-backup
+        - name: clickhouse-backup.timer
+          content: |
+            [Unit]
+            Description=ClickHouse backup set
+            [Timer]
+            OnCalendar=*-*-* 02:30:00
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+        - name: clickhouse-monitor.service
+          content: |
+            [Unit]
+            Description=ClickHouse health check
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/clickhouse-monitor
+        - name: clickhouse-monitor.timer
+          content: |
+            [Unit]
+            Description=ClickHouse health check
+            [Timer]
+            OnCalendar=*:0/15
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+      notify: Reload systemd
+
+    - name: Enable the monitor timer on every node
+      ansible.builtin.systemd_service: {name: clickhouse-monitor.timer, enabled: true, state: started, daemon_reload: true}
+
+    - name: Enable the backup timer on node 0 only
+      ansible.builtin.systemd_service: {name: clickhouse-backup.timer, enabled: true, state: started, daemon_reload: true}
+      when: ordinal == 0
+
+    - name: Run the monitor once so describe has a result
+      ansible.builtin.command: /usr/local/sbin/clickhouse-monitor
+      changed_when: false
+      failed_when: false

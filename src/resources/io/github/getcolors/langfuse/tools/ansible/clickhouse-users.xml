@@ -1,0 +1,49 @@
+<!--
+  Three users. `default` is confined to loopback with no password, which is
+  what the image ships and what clickhouse-client on the host uses for
+  nothing here. `admin` operates the cluster and is the identity distributed
+  queries carry between replicas. `langfuse` carries exactly the grants the
+  Langfuse v4 documentation lists and is reachable from the app host and the
+  replicas alone.
+-->
+<clickhouse>
+  <users>
+    <default><networks><ip>127.0.0.1</ip></networks><password></password></default>
+    <admin>
+      <password_sha256_hex>{{ ch_admin_password | hash('sha256') }}</password_sha256_hex>
+      <networks>
+        <ip>127.0.0.1</ip><ip>::1</ip>
+{% for node in clickhouse_nodes %}
+        <ip>{{ node.vpc_ip }}</ip>
+{% endfor %}
+      </networks>
+      <profile>default</profile><quota>default</quota><access_management>1</access_management>
+    </admin>
+    <langfuse>
+      <password_sha256_hex>{{ ch_langfuse_password | hash('sha256') }}</password_sha256_hex>
+      <networks>
+        <ip>127.0.0.1</ip><ip>::1</ip>
+        <ip>{{ app_vpc_ip }}</ip>
+{% for node in clickhouse_nodes %}
+        <ip>{{ node.vpc_ip }}</ip>
+{% endfor %}
+      </networks>
+      <profile>default</profile><quota>default</quota>
+      <grants>
+        <query>GRANT SELECT, INSERT ON default.*</query>
+        <query>GRANT ALTER UPDATE, ALTER DELETE ON default.*</query>
+        <query>GRANT CREATE, DROP TABLE, DROP VIEW ON default.*</query>
+        <query>GRANT ALTER ADD COLUMN, ALTER MODIFY COLUMN, ALTER VIEW MODIFY QUERY ON default.*</query>
+        <query>GRANT ALTER ADD INDEX, ALTER DROP INDEX, ALTER MATERIALIZE INDEX ON default.*</query>
+        <query>GRANT SELECT(database, table, name, partition, partition_id, active, rows) ON system.parts</query>
+        <query>GRANT SELECT(database, table, is_done) ON system.mutations</query>
+        <query>GRANT SELECT(database, name, engine) ON system.tables</query>
+        <query>GRANT SELECT ON system.processes</query>
+        <query>GRANT SELECT ON system.query_log*</query>
+        <query>GRANT READ ON REMOTE</query>
+        <query>GRANT CLUSTER ON *.*</query>
+        <query>GRANT SYSTEM SYNC REPLICA, SYSTEM MERGES, ALTER SETTINGS ON default.observations_pid_tid_sorting</query>
+      </grants>
+    </langfuse>
+  </users>
+</clickhouse>

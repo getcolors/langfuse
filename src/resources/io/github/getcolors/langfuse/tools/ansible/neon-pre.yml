@@ -1,0 +1,19 @@
+# Before the Neon play: the one thing this package adds to the storage host's
+# Compose project. Installed BESIDE the dependency's compose.yml as
+# compose.override.yml, never passed with -f -- the upstream play runs
+# `docker compose` with chdir /opt/neon and no file flags, so an overlay on
+# the command line would be invisible to every upstream task and handler.
+# Installed BEFORE the play so the dependency's own `up -d compute` already
+# applies it, and a changed publication recreates compute (which is the only
+# way compute may ever be restarted).
+- name: Publish the Neon compute node on the VPC
+  hosts: neon
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.file: {path: /opt/neon, state: directory, mode: "0755"}
+    - name: Install the Compose overlay
+      ansible.builtin.template:
+        src: neon-compose.override.yml
+        dest: /opt/neon/compose.override.yml
+        mode: "0644"

@@ -1,0 +1,196 @@
+# The recovery rehearsal, across four hosts, in the order recovery actually
+# happens: fresh sets, restore both stores, boot the pinned image against them
+# and read through the API, then the two failure drills. Only after all of it
+# does the recovery marker land -- a separate marker from `.colors-ready`,
+# because "the service answers" and "the service can be recovered" are
+# different claims and automation must be able to tell them apart.
+- name: Take a fresh ClickHouse set
+  hosts: clickhouse
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Back up ClickHouse from node 0
+      ansible.builtin.command: /usr/local/sbin/clickhouse-backup
+      when: ordinal == 0
+      register: ch_backup
+      changed_when: true
+
+- name: Take a fresh Postgres set and media run, AFTER the ClickHouse set
+  hosts: neon
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.command: /usr/local/sbin/postgres-backup
+      register: pg_backup
+      changed_when: true
+    - ansible.builtin.command: /usr/local/sbin/media-backup
+      register: media_backup
+      changed_when: true
+
+- name: Restore ClickHouse and choose the paired Postgres set
+  hosts: clickhouse
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Restore the newest completed set that has a later Postgres dump
+      ansible.builtin.command: /usr/local/sbin/clickhouse-restore-check --pair
+      when: ordinal == 0
+      register: ch_restore
+      changed_when: true
+    - name: Record the pair
+      ansible.builtin.set_fact:
+        clickhouse_set: "{{ ch_restore.stdout | regex_search('clickhouse_set=(\\S+)', '\\1') | first }}"
+        postgres_set: "{{ ch_restore.stdout | regex_search('postgres_set=(\\S+)', '\\1') | first }}"
+      when: ordinal == 0
+    - ansible.builtin.debug:
+        msg: "{{ ch_restore.stdout_lines }}"
+      when: ordinal == 0
+
+- name: Restore the paired Postgres set
+  hosts: neon
+  become: true
+  gather_facts: false
+  vars:
+    ch0: "{{ groups['clickhouse'] | map('extract', hostvars) | selectattr('ordinal', 'equalto', 0) | map(attribute='inventory_hostname') | first }}"
+  tasks:
+    - ansible.builtin.command: /usr/local/sbin/postgres-restore-check {{ hostvars[ch0].postgres_set }}
+      register: pg_restore
+      changed_when: true
+    - ansible.builtin.debug:
+        msg: "{{ pg_restore.stdout_lines }}"
+
+- name: Boot the pinned image against the restored data
+  hosts: app
+  become: true
+  gather_facts: false
+  vars:
+    ch0: "{{ groups['clickhouse'] | map('extract', hostvars) | selectattr('ordinal', 'equalto', 0) | map(attribute='inventory_hostname') | first }}"
+  tasks:
+    - ansible.builtin.command: /usr/local/sbin/langfuse-rehearsal {{ hostvars[ch0].clickhouse_set }} {{ hostvars[ch0].postgres_set }}
+      register: boot
+      changed_when: true
+    - ansible.builtin.debug:
+        msg: "{{ boot.stdout_lines }}"
+
+- name: Drop the scratch databases
+  hosts: neon
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.shell: |
+        set -euo pipefail
+        env -i PATH=/usr/bin:/bin PGPASSWORD="$(cat /etc/neon/secrets/cloud_admin_password)" \
+          psql -w "postgresql://cloud_admin@127.0.0.1:<{ neon-compute-port }>/postgres?connect_timeout=10" \
+          -tAc "DROP DATABASE IF EXISTS langfuse_restore_check WITH (FORCE)"
+      args: {executable: /bin/bash}
+      changed_when: true
+- name: Drop the scratch ClickHouse database
+  hosts: clickhouse
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.shell: |
+        set -euo pipefail
+        clickhouse-client --user admin --password "$(cat /etc/clickhouse-secrets/admin_password)" --query "DROP DATABASE IF EXISTS restore_check SYNC"
+      args: {executable: /bin/bash}
+      when: ordinal == 0
+      changed_when: true
+
+# --- drill: losing a ClickHouse replica ---------------------------------------
+- name: Stop replica 1
+  hosts: clickhouse
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.systemd_service: {name: clickhouse-server, state: stopped}
+      when: ordinal == 1
+
+- name: Ingest and read back with a replica down
+  hosts: app
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.command: /usr/local/sbin/langfuse-smoke --ingest-only
+      register: down_probe
+      changed_when: false
+    - ansible.builtin.debug:
+        msg: "replica down: {{ down_probe.stdout }}"
+
+- name: Start replica 1 and wait for it to catch up
+  hosts: clickhouse
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.systemd_service: {name: clickhouse-server, state: started}
+      when: ordinal == 1
+    - name: The replication queue drains
+      ansible.builtin.shell: |
+        set -euo pipefail
+        clickhouse-client --user admin --password "$(cat /etc/clickhouse-secrets/admin_password)" --query "SELECT count() FROM system.replication_queue"
+      args: {executable: /bin/bash}
+      register: rq
+      changed_when: false
+      retries: 60
+      delay: 5
+      until: rq.rc == 0 and (rq.stdout | trim) == '0'
+      when: ordinal == 1
+
+# --- drill: restarting Redis with a queued job --------------------------------
+- name: Stop the worker so a job stays queued
+  hosts: app
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.command: docker compose stop -t 30 langfuse-worker
+      args: {chdir: /opt/langfuse}
+      changed_when: true
+    - ansible.builtin.command: /usr/local/sbin/langfuse-smoke --enqueue-only
+      register: enqueued
+      changed_when: false
+
+- name: Restart Redis
+  hosts: redis
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.command: docker compose restart redis
+      args: {chdir: /opt/redis}
+      changed_when: true
+
+- name: Start the worker and expect the queued trace to land
+  hosts: app
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.command: docker compose start langfuse-worker
+      args: {chdir: /opt/langfuse}
+      changed_when: true
+    - name: The trace enqueued before the restart becomes readable
+      ansible.builtin.shell: |
+        set -euo pipefail
+        PK=$(cat /etc/langfuse/secrets/project_public_key); SK=$(cat /etc/langfuse/secrets/project_secret_key)
+        code=$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' -u "$PK:$SK" "http://127.0.0.1:3000/api/public/traces/{{ enqueued.stdout | trim }}")
+        [ "$code" = "200" ]
+      args: {executable: /bin/bash}
+      register: landed
+      changed_when: false
+      retries: 40
+      delay: 5
+      until: landed.rc == 0
+
+# --- the recovery marker ------------------------------------------------------
+- name: Record that recovery was rehearsed
+  hosts: app
+  become: true
+  gather_facts: false
+  vars:
+    ch0: "{{ groups['clickhouse'] | map('extract', hostvars) | selectattr('ordinal', 'equalto', 0) | map(attribute='inventory_hostname') | first }}"
+  tasks:
+    - ansible.builtin.shell: |
+        set -euo pipefail
+        . /opt/colors/r2-env.sh
+        r2_put_string "<{ profile }> clickhouse={{ hostvars[ch0].clickhouse_set }} postgres={{ hostvars[ch0].postgres_set }} at=$(stamp_now)" \
+          "store:$STORE_BUCKET/${STORE_PREFIX}.colors-recovery-verified"
+        echo "recovery marker written"
+      args: {executable: /bin/bash}
+      changed_when: true

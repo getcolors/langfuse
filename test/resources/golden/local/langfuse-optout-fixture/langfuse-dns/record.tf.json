@@ -1,0 +1,14 @@
+{
+  "resource" : {
+    "cloudflare_dns_record" : {
+      "langfuse" : {
+        "content" : "192.0.2.12",
+        "name" : "langfuse.fixture.example",
+        "proxied" : false,
+        "ttl" : 1,
+        "type" : "A",
+        "zone_id" : "${data.cloudflare_zone.zone.id}"
+      }
+    }
+  }
+}

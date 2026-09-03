@@ -1,0 +1,18 @@
+# The Neon compute node, also on the VPC. The dependency publishes it on
+# loopback for the operator's SSH tunnel; the app host is another machine and
+# reaches it over the private network, which is why this overlay exists and
+# why the firewall group admits exactly one source to this port.
+#
+# Both publications are listed. Compose deduplicates identical port entries
+# when it merges the two files, and listing the loopback one here means the
+# dependency's own smoke gates keep working whatever merge semantics a future
+# Compose applies to `ports` lists.
+#
+# There is deliberately no top-level `name:`: the dependency's compose.yml
+# declares `name: neon` and keeps it.
+services:
+  compute:
+    ports:
+      - "127.0.0.1:<{ neon-compute-port }>:<{ neon-compute-port }>"
+      - "{{ vpc_ip }}:<{ neon-compute-port }>:<{ neon-compute-port }>"
+      - "127.0.0.1:3080:3080"

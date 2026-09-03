@@ -1,0 +1,61 @@
+{
+  "all" : {
+    "children" : {
+      "app" : {
+        "hosts" : {
+          "langfuse-optout-fixture-app" : {
+            "ansible_host" : "192.0.2.12",
+            "ansible_user" : "root",
+            "role" : "app",
+            "vpc_ip" : "10.50.0.12"
+          }
+        }
+      },
+      "clickhouse" : {
+        "hosts" : {
+          "langfuse-optout-fixture-clickhouse-0" : {
+            "ansible_host" : "192.0.2.20",
+            "ansible_user" : "root",
+            "ordinal" : 0,
+            "role" : "clickhouse",
+            "vpc_ip" : "10.50.0.20"
+          },
+          "langfuse-optout-fixture-clickhouse-1" : {
+            "ansible_host" : "192.0.2.21",
+            "ansible_user" : "root",
+            "ordinal" : 1,
+            "role" : "clickhouse",
+            "vpc_ip" : "10.50.0.21"
+          },
+          "langfuse-optout-fixture-clickhouse-2" : {
+            "ansible_host" : "192.0.2.22",
+            "ansible_user" : "root",
+            "ordinal" : 2,
+            "role" : "clickhouse",
+            "vpc_ip" : "10.50.0.22"
+          }
+        }
+      },
+      "neon" : {
+        "hosts" : {
+          "langfuse-optout-fixture-neon" : {
+            "ansible_host" : "192.0.2.10",
+            "ansible_user" : "root",
+            "role" : "neon",
+            "vpc_ip" : "10.50.0.10"
+          }
+        }
+      },
+      "redis" : {
+        "hosts" : {
+          "langfuse-optout-fixture-redis" : {
+            "ansible_host" : "192.0.2.11",
+            "ansible_user" : "root",
+            "role" : "redis",
+            "vpc_ip" : "10.50.0.11"
+          }
+        }
+      }
+    }
+  }
+}

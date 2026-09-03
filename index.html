@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Provision self-hosted Langfuse v4 on six Vultr machines in one VPC — a Neon storage tier, Redis, three ClickHouse replicas with Keeper, and the application host behind Cloudflare — with Cloudflare R2 for events, media and backups.">
+  <title>Langfuse Package Skill — getcolors</title>
+  <style>
+    :root{color-scheme:light;--ink:#1f2328;--muted:#59636e;--line:#d0d7de;--soft:#f6f8fa;--blue:#0969da;--green:#1a7f37;--warn:#9a6700}*{box-sizing:border-box}body{margin:0;color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:920px;margin:auto;padding:64px 28px 100px}h1{font-size:52px;line-height:1.05;margin:0}h2{margin-top:54px;padding-bottom:8px;border-bottom:1px solid var(--line)}h3{margin-top:30px}.lead{font-size:20px;color:var(--muted);max-width:790px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}pre{padding:18px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--soft)}:not(pre)>code{padding:.12em .35em;border-radius:5px;background:var(--soft)}a{color:var(--blue)}.eyebrow{color:var(--green);font-weight:700;letter-spacing:.08em}.callout{padding:16px 18px;border-left:4px solid var(--green);background:#dafbe1}.warning{border-color:var(--warn);background:#fff8c5}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card{padding:18px;border:1px solid var(--line);border-radius:8px}.card h3{margin-top:0}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{padding:8px 10px;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}@media(max-width:650px){main{padding-top:38px}.grid{grid-template-columns:1fr}h1{font-size:40px}}
+  </style>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-4VKP1WY4QJ"></script>
+  <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','G-4VKP1WY4QJ',{page_title:'Langfuse Package Skill — getcolors'});</script>
+<script src="https://rybbit.getcolors.ai/api/script.js" data-site-id="9fb9c41a6d49" defer></script>
+</head>
+<body><main>
+  <p class="eyebrow">GREEN PACKAGE SKILL · VULTR · LANGFUSE</p>
+  <h1>Langfuse Package Skill</h1>
+  <p class="lead">A reproducible Green workflow for self-hosted Langfuse v4 on six Vultr machines in one VPC: a self-hosted Neon storage tier, Redis, three ClickHouse replicas with their own Keeper quorum, and the application host behind Caddy and Cloudflare — with Cloudflare R2 holding events, media, Neon's layers and WAL, and the backups.</p>
+
+  <div class="callout"><strong>Separate machines, proven separate.</strong> Langfuse's own guidance is one Docker Compose host for testing or Kubernetes for production. This package is the shape in between: every component Langfuse says should be separate is on its own machine, reachable only from the peer that needs it — and the smoke gate proves a <em>denial</em> as well as the allows.</div>
+
+  <h2>Quick start</h2>
+  <pre><code>npx skills add getcolors/langfuse
+cp .agents/skills/package-langfuse-green/green ./green
+chmod +x green
+./green build
+./green create --dry-run</code></pre>
+  <p>Build renders reproducible output and dry-run walks the workflow without provider side effects. Real creation and deletion require explicit authorization.</p>
+
+  <h2>Architecture</h2>
+  <div class="grid">
+    <div class="card"><h3>Storage tier</h3><p>The <a href="https://github.com/getcolors/neon">getcolors/neon</a> templates rendered from a SHA pin — storage broker, pageserver, one safekeeper, Postgres 17 under <code>compute_ctl</code> — plus one Compose overlay publishing the compute port on the VPC.</p></div>
+    <div class="card"><h3>Analytics tier</h3><p>Three ClickHouse replicas, one shard, one Keeper voter each, cluster <code>default</code> so Langfuse migrates <code>ON CLUSTER</code> unaided. Secrets generated on node 0 and propagated; backups to R2 through a disk whose credentials never enter SQL.</p></div>
+    <div class="card"><h3>Cache tier</h3><p>Redis 7.2 with <code>noeviction</code> and an append-only file on a named volume, on the VPC address only.</p></div>
+    <div class="card"><h3>Application tier</h3><p><code>langfuse-web</code>, <code>langfuse-worker</code> with the stuck-queue health flag, and Caddy behind Cloudflare. Headless initialization creates the organization, project, user and keys on first boot.</p></div>
+  </div>
+
+  <h2>Network</h2>
+  <table>
+    <tr><th>Machine</th><th>Admits</th><th>From</th></tr>
+    <tr><td>every machine</td><td>22</td><td><code>vultr-ssh-sources</code>, key-only</td></tr>
+    <tr><td><code>&lt;profile&gt;-app</code></td><td>80, 443</td><td>Cloudflare's published ranges, resolved at render time</td></tr>
+    <tr><td><code>&lt;profile&gt;-neon</code></td><td>55433</td><td>the app host's VPC address</td></tr>
+    <tr><td><code>&lt;profile&gt;-redis</code></td><td>6379</td><td>the app host's VPC address</td></tr>
+    <tr><td><code>&lt;profile&gt;-clickhouse-{0,1,2}</code></td><td>8123, 9000 · 9000, 9009, 9181, 9234</td><td>the app host · each other</td></tr>
+  </table>
+  <p>One Vultr firewall group per role, because a group filters the private interface too; ufw mirrors the same rules on every host.</p>
+
+  <h2>What convergence proves</h2>
+  <ul>
+    <li>a trace, a generation and a score in through the ingestion API, read back through the public API, present on node 0 <em>and</em> the last replica, and a <em>new</em> raw-event object in R2;</li>
+    <li>a media file up through a presigned URL and back with the same sha256;</li>
+    <li>200 traces queryable within the timeout, host memory under 85 %;</li>
+    <li>wrong API key, anonymous request, unauthenticated Redis <code>PING</code>, wrong ClickHouse and Postgres passwords refused;</li>
+    <li>raw TCP to every dependency the app needs, and a refusal on Keeper; <code>UTC</code> on both databases.</li>
+  </ul>
+
+  <h2>Recovery is rehearsed, not assumed</h2>
+  <p><code>./green rehearse</code> takes fresh backup sets, restores both stores, boots the pinned image in a second Compose project on loopback with the operator-held <code>ENCRYPTION_KEY</code> and <code>SALT</code>, reads the trace, the project and an encrypted LLM connection back through the API, stops a replica under ingestion, restarts Redis with a job queued — and only then writes <code>.colors-recovery-verified</code>, a marker distinct from <code>.colors-ready</code>.</p>
+
+  <div class="callout warning"><strong>Three secrets outlive the app host.</strong> <code>ENCRYPTION_KEY</code>, <code>SALT</code> and the initial user's password are operator-held on purpose: a Postgres backup restored onto a fresh host is readable only with the same two values, and the password is what logs you in when the generated project keys are gone. Keep them outside these machines.</div>
+
+  <h2>Credentials</h2>
+  <p>Every credential is a <code>COLORS_PAR_*</code> environment variable in a gitignored <code>.envrc.private</code>; the state pair reaches no host, the storage pair reaches the Neon and app hosts, the backup pair reaches the Neon host and ClickHouse node 0. The package refuses a create when pairs are shared unless <code>colors.yml</code> records that choice.</p>
+
+  <p><a href="https://github.com/getcolors/langfuse">Source on GitHub</a> · <a href="https://github.com/getcolors/langfuse-vultr">The langfuse-vultr deployment</a> · <a href="https://www.getcolors.ai/skills">Skills Catalog</a></p>
+</main></body>
+</html>

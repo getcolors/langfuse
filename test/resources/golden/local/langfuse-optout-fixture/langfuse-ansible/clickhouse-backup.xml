@@ -1,0 +1,24 @@
+<!--
+  The backup destination as a DISK, node 0 only. BACKUP ... TO Disk('backups',
+  ...) names this disk and nothing else, so the credential below is the only
+  copy: not in a SQL statement, not in system.query_log, not on a command
+  line. The endpoint carries the bucket and this deployment's prefix; every
+  backup set lands under it as <stamp>/.
+-->
+<clickhouse>
+  <storage_configuration>
+    <disks>
+      <backups>
+        <type>s3</type>
+        <endpoint>https://fixture.r2.cloudflarestorage.com/langfuse-backup-fixture/langfuse-optout-fixture/clickhouse/</endpoint>
+        <access_key_id>{{ lookup('env','COLORS_PAR_LANGFUSE_BACKUP_R2_ACCESS_KEY_ID') }}</access_key_id>
+        <secret_access_key>{{ lookup('env','COLORS_PAR_LANGFUSE_BACKUP_R2_SECRET_ACCESS_KEY') }}</secret_access_key>
+        <region>auto</region>
+        <use_environment_credentials>false</use_environment_credentials>
+      </backups>
+    </disks>
+  </storage_configuration>
+  <backups>
+    <allowed_disk>backups</allowed_disk>
+  </backups>
+</clickhouse>

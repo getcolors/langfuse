@@ -1,0 +1,111 @@
+# What every host gets before its role: the tools the scripts need, UTC, an
+# sshd that refuses passwords, and a host firewall that mirrors the provider
+# firewall rule for rule.
+#
+# Two firewalls, and the second one is not decoration. The Vultr Ubuntu image
+# ships ufw ENABLED with a single 22/tcp rule, and ufw filters the VPC
+# interface too: ClickHouse runs natively, so without the allows below every
+# replica pings every other replica while every TCP connection between them is
+# dropped -- the quorum never forms and nothing names the firewall. Docker's
+# published ports (Neon's compute, Redis) bypass ufw through the DOCKER chain,
+# which is why the provider group, not ufw, is the load-bearing layer for
+# those two; the allows here keep both layers telling the same story.
+- name: Prepare every host
+  hosts: all
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - ansible.builtin.wait_for_connection: {connect_timeout: 10, delay: 5, sleep: 5, timeout: 600}
+    - ansible.builtin.setup:
+  tasks:
+    - name: Install the tools every role's scripts rely on
+      ansible.builtin.apt:
+        name: [ufw, ca-certificates, curl, jq, python3, openssl, rclone]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the monitor result directory
+      ansible.builtin.file: {path: /var/lib/colors, state: directory, mode: "0755"}
+
+    # Langfuse requires UTC on both databases and answers wrong or empty
+    # results otherwise. Vultr's image defaults to UTC; asserted, not assumed.
+    - name: Read the system timezone
+      ansible.builtin.command: timedatectl show -p Timezone --value
+      register: tz
+      changed_when: false
+    - name: Set the system timezone to UTC
+      ansible.builtin.command: timedatectl set-timezone UTC
+      when: tz.stdout | trim != 'UTC'
+
+    # SSH is open to the internet by workspace convention, so these negative
+    # controls are the entire mitigation. Ubuntu ships 50-cloud-init.conf with
+    # `PasswordAuthentication yes`; this 10- file wins because sshd uses the
+    # FIRST value obtained for a keyword.
+    - name: Harden sshd
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/10-colors-langfuse.conf
+        mode: "0644"
+        content: |
+          PasswordAuthentication no
+          PermitRootLogin prohibit-password
+          KbdInteractiveAuthentication no
+      notify: Restart sshd
+
+    # Every role's peer addresses, resolved once from the inventory. Sorted so
+    # a re-run applies the same rules in the same order.
+    - name: Resolve the peer addresses this host admits
+      ansible.builtin.set_fact:
+        app_vpc_ip: "{{ hostvars[groups['app'][0]].vpc_ip }}"
+        clickhouse_vpc_ips: "{{ groups['clickhouse'] | map('extract', hostvars, 'vpc_ip') | sort }}"
+
+    - name: Set the ufw defaults
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ufw default deny incoming >/dev/null
+        ufw default allow outgoing >/dev/null
+        ufw allow 22/tcp >/dev/null
+      args: {executable: /bin/bash}
+      changed_when: false
+
+    - name: Admit the public HTTP ports on the app host
+      ansible.builtin.command: ufw allow {{ item }}/tcp
+      loop: [80, 443]
+      when: role == 'app'
+      register: ufw_http
+      changed_when: "'Skipping' not in ufw_http.stdout"
+
+    - name: Admit the app host to the Neon compute port
+      ansible.builtin.command: ufw allow from {{ app_vpc_ip }} to any port 55433 proto tcp
+      when: role == 'neon'
+      register: ufw_neon
+      changed_when: "'Skipping' not in ufw_neon.stdout"
+
+    - name: Admit the app host to Redis
+      ansible.builtin.command: ufw allow from {{ app_vpc_ip }} to any port 6379 proto tcp
+      when: role == 'redis'
+      register: ufw_redis
+      changed_when: "'Skipping' not in ufw_redis.stdout"
+
+    - name: Admit the app host to the ClickHouse client ports
+      ansible.builtin.command: ufw allow from {{ app_vpc_ip }} to any port {{ item }} proto tcp
+      loop: ["8123", "9000"]
+      when: role == 'clickhouse'
+      register: ufw_ch_app
+      changed_when: "'Skipping' not in ufw_ch_app.stdout"
+
+    - name: Admit the ClickHouse replicas to each other
+      ansible.builtin.command: ufw allow from {{ item.0 }} to any port {{ item.1 }} proto tcp
+      loop: "{{ clickhouse_vpc_ips | product(['9000', '9009', '9181', '9234']) | list }}"
+      when: role == 'clickhouse'
+      register: ufw_ch_peer
+      changed_when: "'Skipping' not in ufw_ch_peer.stdout"
+
+    - name: Enable ufw
+      ansible.builtin.command: ufw --force enable
+      register: ufw_enable
+      changed_when: "'already' not in ufw_enable.stdout"
+
+  handlers:
+    - name: Restart sshd
+      ansible.builtin.service: {name: ssh, state: restarted}
