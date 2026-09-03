@@ -20,7 +20,7 @@
 
 ;; Managed by `bb pin` — do not edit by hand. An initial nil is intentional:
 ;; the repository must be committed and pushed before a real SHA can be stamped.
-(def ^:private langfuse-sha "aa30dc9f5ab4a17e81c03f93a4c2b6eff56df096")
+(def ^:private langfuse-sha "e7a18678d3b7a5be23cd6f701927794514e7efe6")
 
 (def ^:private langfuse-git-url "https://github.com/getcolors/langfuse.git")
 (def ^:private green-git-url "https://github.com/getcolors/green.git")
