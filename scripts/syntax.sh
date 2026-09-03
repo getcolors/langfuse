@@ -6,7 +6,7 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 sed "s#WORKDIR#$tmp/work#" "$root/test/fixtures/colors.yml" > "$tmp/colors.yml"
-(cd "$root" && LANGFUSE_LIB_ROOT="$root" ./green build -f "$tmp/colors.yml" >/dev/null)
+(cd "$root/green" && LANGFUSE_LIB_ROOT="$root" ./green build -f "$tmp/colors.yml" >/dev/null)
 dir="$tmp/work/langfuse-fixture/langfuse-ansible"
 rc=0
 for pb in site.yml cleanup.yml rehearsal.yml; do

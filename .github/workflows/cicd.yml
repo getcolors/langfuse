@@ -10,6 +10,6 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@13.4
         with:
           bb: latest
-      - run: bb test
-      - run: bb golden
+      - run: cd green && bb test
+      - run: cd green && bb golden
       - run: ./scripts/launcher.sh

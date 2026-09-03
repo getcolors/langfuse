@@ -16,10 +16,10 @@
                                  'io.github.getcolors.langfuse.workflow-test)]
                 (System/exit (if (pos? (+ fail error)) 1 0)))}
   golden {:doc "Render and diff committed golden output"
-          :task (shell "./scripts/golden.sh")}
+          :task (shell "../scripts/golden.sh")}
   golden:accept {:doc "Regenerate goldens after inspecting a fresh render"
-                 :task (shell "./scripts/golden.sh" "--accept")}
+                 :task (shell "../scripts/golden.sh" "--accept")}
   syntax {:doc "Offline ansible-playbook --syntax-check on the rendered tree"
-          :task (shell "./scripts/syntax.sh")}
+          :task (shell "../scripts/syntax.sh")}
   pin {:doc "Stamp the launcher after a clean pushed commit"
        :task (load-file "tasks/pin.clj")}}}

@@ -53,6 +53,6 @@ for verb in build create delete rehearse describe; do
 done
 ok 'lifecycle, rehearsal and describe commands are dispatchable'
 
-[ -L "$root/green" ] && [ "$(readlink "$root/green")" = skills/package-langfuse-green/green ] || fail 'root green is not the payload symlink'
-ok 'root launcher is the payload symlink'
+[ -L "$root/green/green" ] && [ "$(readlink "$root/green/green")" = ../skills/package-langfuse-green/green ] || fail 'green/green is not the payload symlink'
+ok 'colour launcher is the payload symlink'
 echo "launcher: $checks checks passed"

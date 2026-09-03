@@ -5,7 +5,7 @@
             [clojure.string :as str]))
 
 (def ^:private site
-  {:path "skills/package-langfuse-green/green"
+  {:path "../skills/package-langfuse-green/green"
    :rx #"\(def \^:private langfuse-sha (nil|\"[0-9a-f]{40}\")\)"})
 
 (defn- git-out [dir & args]
@@ -44,7 +44,7 @@
             current (current-pin text)]
         (if-not current
           {:green/exit 2 :green/err (str "could not locate langfuse-sha in " (:path site))}
-          (let [[head err] (repo-head "." "langfuse")]
+          (let [[head err] (repo-head ".." "langfuse")]
             (cond
               err {:green/exit 2 :green/err err}
               (= (pr-str head) current)
