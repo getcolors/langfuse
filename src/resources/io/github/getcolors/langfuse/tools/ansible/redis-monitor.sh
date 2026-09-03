@@ -13,8 +13,12 @@ used=$(r INFO memory | sed -n 's/^used_memory:\([0-9]*\).*/\1/p'); total=$(free 
 if [ -n "${used:-}" ] && [ -n "${total:-}" ] && [ "$total" -gt 0 ]; then
   pct=$((used * 100 / total)); [ "$pct" -lt 70 ] || problems+=("redis uses ${pct}% of host memory")
 fi
-rc=$(docker inspect -f '{{.RestartCount}}' "$(docker compose ps -q redis 2>/dev/null)" 2>/dev/null || echo 0)
-[ "${rc:-0}" -lt 5 ] || problems+=("redis restarted ${rc} times")
+# RestartCount is cumulative; pair it with a recent StartedAt (see the app monitor).
+id=$(docker compose ps -q redis 2>/dev/null)
+rc=$(docker inspect -f '{{.RestartCount}}' "$id" 2>/dev/null || echo 0)
+started=$(docker inspect -f '{{.State.StartedAt}}' "$id" 2>/dev/null || echo "")
+age=$(( $(date +%s) - $(date -d "${started:-1970-01-01}" +%s 2>/dev/null || echo 0) ))
+{ [ "${rc:-0}" -ge 5 ] && [ "$age" -lt 1800 ]; } && problems+=("redis is restarting (${rc} restarts, last start ${age}s ago)")
 disk=$(df --output=pcent / | tail -1 | tr -dc '0-9'); [ "${disk:-0}" -lt 80 ] || problems+=("disk ${disk}%")
 ok=0; [ "${#problems[@]}" -eq 0 ] || ok=1
 write_monitor /var/lib/colors/redis-monitor.json "$ok" "${problems[@]}"

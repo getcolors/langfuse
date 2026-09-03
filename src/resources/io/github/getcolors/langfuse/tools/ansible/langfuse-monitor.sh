@@ -11,8 +11,13 @@ cd /opt/langfuse 2>/dev/null && for s in langfuse-web langfuse-worker caddy; do
   id=$(docker compose ps -q "$s" 2>/dev/null)
   st=$(docker inspect -f '{{.State.Status}}' "$id" 2>/dev/null || echo missing)
   [ "$st" = running ] || problems+=("container $s is $st")
+  # RestartCount is cumulative for the container's life, so it alone flags a
+  # container that looped once weeks ago and has been fine since. A container
+  # that is restarting NOW has a recent StartedAt; that pair is the signal.
   rcnt=$(docker inspect -f '{{.RestartCount}}' "$id" 2>/dev/null || echo 0)
-  [ "${rcnt:-0}" -lt 5 ] || problems+=("container $s restarted ${rcnt} times")
+  started=$(docker inspect -f '{{.State.StartedAt}}' "$id" 2>/dev/null || echo "")
+  age=$(( $(date +%s) - $(date -d "${started:-1970-01-01}" +%s 2>/dev/null || echo 0) ))
+  { [ "${rcnt:-0}" -ge 5 ] && [ "$age" -lt 1800 ]; } && problems+=("container $s is restarting (${rcnt} restarts, last start ${age}s ago)")
 done
 disk=$(df --output=pcent / | tail -1 | tr -dc '0-9'); [ "${disk:-0}" -lt 80 ] || problems+=("disk ${disk}%")
 mem=$(free | awk '/^Mem:/ {printf "%d", $3*100/$2}'); [ "${mem:-0}" -lt 85 ] || problems+=("memory ${mem}%")
