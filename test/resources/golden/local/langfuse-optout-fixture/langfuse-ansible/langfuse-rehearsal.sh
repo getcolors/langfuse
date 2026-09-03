@@ -83,6 +83,15 @@ else
   fail "R3 no smoke trace id recorded; run the converge first"
 fi
 
+# The score lives in restore_check.scores; the app exposes no v4 read for a
+# score by trace on this deployment's contract, so it is read from ClickHouse
+# with the application user (which the cluster play grants on restore_check).
+if [ -n "$T" ]; then
+  CH_URL=$(sed -n 's/^CLICKHOUSE_URL=//p' /etc/langfuse/langfuse.env); CH_PW=$(sed -n 's/^CLICKHOUSE_PASSWORD=//p' /etc/langfuse/host.env)
+  sc=$(curl -sS --max-time 30 -H "X-ClickHouse-User: langfuse" -H "X-ClickHouse-Key: $CH_PW" --data-binary "SELECT count() FROM restore_check.scores WHERE trace_id = '$T' AND name = 'colors-smoke-score'" "$CH_URL/" 2>/dev/null | tr -d '[:space:]')
+  [ "${sc:-0}" -ge 1 ] && pass "R3b the smoke score is in the restored scores table" || fail "R3b the smoke score is missing from restore_check.scores (${sc:-unreadable})"
+fi
+
 r=$(curl -sS --max-time 30 -u "$PK:$SK" -w '\n%{http_code}' "http://127.0.0.1:$PORT/api/public/llm-connections")
 st=$(printf '%s' "$r" | tail -1); body=$(printf '%s' "$r" | sed '$d')
 if [ "$st" = "200" ] && printf '%s' "$body" | python3 -c 'import json,sys; d=json.load(sys.stdin); xs=d.get("data",d if isinstance(d,list) else []); sys.exit(0 if any(x.get("provider")=="colors-rehearsal" and x.get("displaySecretKey") for x in xs) else 1)' 2>/dev/null; then

@@ -32,8 +32,16 @@ psql_admin "CREATE DATABASE $SCRATCH OWNER <{ neon-role }>" >/dev/null
 # The dump is piped on stdin: the compute container mounts a tmpfs on /tmp,
 # and a `docker compose cp` lands underneath it. pg_restore from the compute
 # image for the same reason pg_dump runs there.
+# Failures are not discarded: a partial restore with SOME tables would pass
+# the counts below and reach the boot. Only one diagnostic is benign here —
+# the dump carries COMMENT ON EXTENSION plpgsql, which the application role
+# may not own — and every other error line fails the restore.
 docker compose exec -T compute env PGPASSWORD="$role_pw" \
   pg_restore -w --no-owner --no-acl -h 127.0.0.1 -p <{ neon-compute-port }> -U <{ neon-role }> -d "$SCRATCH" < "$WORK/langfuse.dump" 2>"$WORK/restore.log" || true
+bad=$(grep -E '^pg_restore: (error|warning):' "$WORK/restore.log" | grep -vE 'must be owner of extension|errors ignored on restore' | grep -c . || true)
+if [ "${bad:-0}" -gt 0 ]; then
+  echo "postgres-restore-check: pg_restore reported $bad error lines:" >&2; grep -E '^pg_restore: (error|warning):' "$WORK/restore.log" | head -5 >&2; exit 1
+fi
 tables=$(psql_scratch "select count(*) from information_schema.tables where table_schema='public'")
 [ "${tables:-0}" -gt 0 ] || { echo "postgres-restore-check: the restore produced no tables" >&2; tail -5 "$WORK/restore.log" >&2; exit 1; }
 foreign=$(psql_scratch "select count(*) from pg_tables where schemaname='public' and tableowner <> '<{ neon-role }>'")

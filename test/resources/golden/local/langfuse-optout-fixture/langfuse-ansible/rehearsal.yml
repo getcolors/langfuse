@@ -97,86 +97,77 @@
       changed_when: true
 
 # --- drill: losing a ClickHouse replica ---------------------------------------
-- name: Stop replica 1
+# The disruption and its undo are one play, so a failed probe still starts the
+# replica again before the failure propagates. Ansible's `always` is what turns
+# a drill that can fail into one that cannot leave the deployment degraded.
+- name: Replica-loss drill
   hosts: clickhouse
   become: true
   gather_facts: false
   tasks:
-    - ansible.builtin.systemd_service: {name: clickhouse-server, state: stopped}
+    - name: Stop replica 1, probe from the app host, start it again
       when: ordinal == 1
-
-- name: Ingest and read back with a replica down
-  hosts: app
-  become: true
-  gather_facts: false
-  tasks:
-    - ansible.builtin.command: /usr/local/sbin/langfuse-smoke --ingest-only
-      register: down_probe
-      changed_when: false
-    - ansible.builtin.debug:
-        msg: "replica down: {{ down_probe.stdout }}"
-
-- name: Start replica 1 and wait for it to catch up
-  hosts: clickhouse
-  become: true
-  gather_facts: false
-  tasks:
-    - ansible.builtin.systemd_service: {name: clickhouse-server, state: started}
-      when: ordinal == 1
-    - name: The replication queue drains
-      ansible.builtin.shell: |
-        set -euo pipefail
-        clickhouse-client --user admin --password "$(cat /etc/clickhouse-secrets/admin_password)" --query "SELECT count() FROM system.replication_queue"
-      args: {executable: /bin/bash}
-      register: rq
-      changed_when: false
-      retries: 60
-      delay: 5
-      until: rq.rc == 0 and (rq.stdout | trim) == '0'
-      when: ordinal == 1
+      block:
+        - ansible.builtin.systemd_service: {name: clickhouse-server, state: stopped}
+        - name: Ingest and read back with the replica down
+          ansible.builtin.command: /usr/local/sbin/langfuse-smoke --ingest-only
+          delegate_to: "{{ groups['app'][0] }}"
+          register: down_probe
+          changed_when: false
+        - ansible.builtin.debug:
+            msg: "replica down: {{ down_probe.stdout }}"
+      always:
+        - ansible.builtin.systemd_service: {name: clickhouse-server, state: started}
+        - name: The replication queue drains
+          ansible.builtin.shell: |
+            set -euo pipefail
+            clickhouse-client --user admin --password "$(cat /etc/clickhouse-secrets/admin_password)" --query "SELECT count() FROM system.replication_queue"
+          args: {executable: /bin/bash}
+          register: rq
+          changed_when: false
+          retries: 60
+          delay: 5
+          until: rq.rc == 0 and (rq.stdout | trim) == '0'
 
 # --- drill: restarting Redis with a queued job --------------------------------
-- name: Stop the worker so a job stays queued
+- name: Redis-restart drill
   hosts: app
   become: true
   gather_facts: false
   tasks:
-    - ansible.builtin.command: docker compose stop -t 30 langfuse-worker
-      args: {chdir: /opt/langfuse}
-      changed_when: true
-    - ansible.builtin.command: /usr/local/sbin/langfuse-smoke --enqueue-only
-      register: enqueued
-      changed_when: false
-
-- name: Restart Redis
-  hosts: redis
-  become: true
-  gather_facts: false
-  tasks:
-    - ansible.builtin.command: docker compose restart redis
-      args: {chdir: /opt/redis}
-      changed_when: true
-
-- name: Start the worker and expect the queued trace to land
-  hosts: app
-  become: true
-  gather_facts: false
-  tasks:
-    - ansible.builtin.command: docker compose start langfuse-worker
-      args: {chdir: /opt/langfuse}
-      changed_when: true
-    - name: The trace enqueued before the restart becomes readable
-      ansible.builtin.shell: |
-        set -euo pipefail
-        PK=$(cat /etc/langfuse/secrets/project_public_key); SK=$(cat /etc/langfuse/secrets/project_secret_key)
-        n=$(curl -sS --max-time 30 -u "$PK:$SK" "http://127.0.0.1:3000/api/public/v2/observations?traceId={{ enqueued.stdout | trim }}&limit=10" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("data",[])))')
-        [ "${n:-0}" -ge 2 ]
-      args: {executable: /bin/bash}
-      register: landed
-      changed_when: false
-      retries: 40
-      delay: 5
-      until: landed.rc == 0
+    - name: Stop the worker, enqueue, restart Redis, expect the job to land
+      block:
+        - ansible.builtin.command: docker compose stop -t 30 langfuse-worker
+          args: {chdir: /opt/langfuse}
+          changed_when: true
+        - ansible.builtin.command: /usr/local/sbin/langfuse-smoke --enqueue-only
+          register: enqueued
+          changed_when: false
+        - name: Restart Redis
+          ansible.builtin.command: docker compose restart redis
+          args: {chdir: /opt/redis}
+          delegate_to: "{{ groups['redis'][0] }}"
+          changed_when: true
+        - ansible.builtin.command: docker compose start langfuse-worker
+          args: {chdir: /opt/langfuse}
+          changed_when: true
+        - name: The trace enqueued before the restart becomes readable
+          ansible.builtin.shell: |
+            set -euo pipefail
+            PK=$(cat /etc/langfuse/secrets/project_public_key); SK=$(cat /etc/langfuse/secrets/project_secret_key)
+            n=$(curl -sS --max-time 30 -u "$PK:$SK" "http://127.0.0.1:3000/api/public/v2/observations?traceId={{ enqueued.stdout | trim }}&limit=10" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("data",[])))')
+            [ "${n:-0}" -ge 2 ]
+          args: {executable: /bin/bash}
+          register: landed
+          changed_when: false
+          retries: 40
+          delay: 5
+          until: landed.rc == 0
+      always:
+        - name: The worker is running whatever happened above
+          ansible.builtin.command: docker compose start langfuse-worker
+          args: {chdir: /opt/langfuse}
+          changed_when: false
 
 # --- the recovery marker ------------------------------------------------------
 - name: Record that recovery was rehearsed

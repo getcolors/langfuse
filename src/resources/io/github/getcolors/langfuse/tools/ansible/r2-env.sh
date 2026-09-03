@@ -23,7 +23,15 @@ export RCLONE_CONFIG_BACKUP_TYPE=s3 RCLONE_CONFIG_BACKUP_PROVIDER=Cloudflare
 export RCLONE_CONFIG_BACKUP_ENDPOINT="<{ langfuse-backup-r2-endpoint }>" RCLONE_CONFIG_BACKUP_REGION="<{ langfuse-backup-r2-region }>"
 export RCLONE_CONFIG_BACKUP_NO_CHECK_BUCKET=true RCLONE_CONFIG_BACKUP_NO_HEAD=true
 
-if [ -f /etc/neon/r2.env ]; then
+# The Langfuse storage credential, installed on the Neon host by the backups
+# play, comes first: when the deployment splits Neon data and Langfuse blobs
+# into two buckets and two tokens, the media archive must read the Langfuse
+# bucket with the Langfuse token, not with the Neon token neon's play holds.
+if [ -f /etc/colors/store-r2.env ]; then
+  RCLONE_CONFIG_STORE_ACCESS_KEY_ID=$(sed -n 's/^STORE_R2_ACCESS_KEY_ID=//p' /etc/colors/store-r2.env)
+  RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY=$(sed -n 's/^STORE_R2_SECRET_ACCESS_KEY=//p' /etc/colors/store-r2.env)
+  export RCLONE_CONFIG_STORE_ACCESS_KEY_ID RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY
+elif [ -f /etc/neon/r2.env ]; then
   RCLONE_CONFIG_STORE_ACCESS_KEY_ID=$(sed -n 's/^AWS_ACCESS_KEY_ID=//p' /etc/neon/r2.env)
   RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY=$(sed -n 's/^AWS_SECRET_ACCESS_KEY=//p' /etc/neon/r2.env)
   export RCLONE_CONFIG_STORE_ACCESS_KEY_ID RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY

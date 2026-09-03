@@ -169,3 +169,32 @@ APPROVED. Both non-blocking notes were folded into §19: the named collection ma
 ### Resolution
 
 Converged after 4 rounds (MAX_ROUNDS=5). What the loop changed, in three lines: durable application secrets became operator-held and the restore became a boot-and-read-through-the-API rehearsal instead of a row count; the network became role-scoped per peer address with a denial in the gates; the backup path gained a completion protocol, a credential-free ClickHouse backup, an additive media archive, and a restore-time pairing rule that keeps Postgres the newer snapshot. Rejected and logged: quiescing writes for backups, a third bucket, an external alert sink, and backing up the raw-events buffer.
+
+## Post-build inspection
+
+Fresh Codex session (gpt-5.6-sol), after twelve live converges and three rehearsals. Findings verbatim:
+
+1. **High — [media-backup.sh](/home/ubuntu/code/getcolors/langfuse/src/resources/io/github/getcolors/langfuse/tools/ansible/media-backup.sh:23):** The media manifest records only names and sizes, not hashes; once an archived object disappears from the live prefix, `rclone check --one-way` no longer verifies it, so corruption of the backup copy becomes undetectable and the `.complete` marker can still be renewed. **Fix:** Persist a checksum for every destination object and verify the entire archived destination against that manifest before publishing `.complete`.
+
+2. **High — [clickhouse-backup.sh](/home/ubuntu/code/getcolors/langfuse/src/resources/io/github/getcolors/langfuse/tools/ansible/clickhouse-backup.sh:18):** ClickHouse sets are written directly to the published prefix and validated only by object count, total bytes, and `.backup` existence—there is no per-object checksum/read-back verification or incoming-to-final publication protocol required by §19. **Fix:** Back up under `incoming/<stamp>`, record and read-back-verify every object’s size and checksum, copy verified objects to the final prefix excluding markers, then write the final `.complete` last.
+
+3. **High — [r2-env.sh](/home/ubuntu/code/getcolors/langfuse/src/resources/io/github/getcolors/langfuse/tools/ansible/r2-env.sh:26):** The advertised configuration-only split of Neon and Langfuse storage cannot work for media backup: on the Neon host, `store` always uses `/etc/neon/r2.env`, so `media-backup` cannot access a distinct `langfuse-s3-bucket` using `LANGFUSE_STORAGE_R2_*`. **Fix:** Install the Langfuse-storage credential separately on the Neon host and define a distinct rclone remote for the media source.
+
+4. **Medium — [postgres-restore-check.sh](/home/ubuntu/code/getcolors/langfuse/src/resources/io/github/getcolors/langfuse/tools/ansible/postgres-restore-check.sh:35):** `pg_restore` failures are unconditionally discarded with `|| true`; a partial restore containing some tables can pass the subsequent table/ownership checks and proceed to the boot rehearsal. **Fix:** Fail on any restore error, allowing only an explicit, narrowly matched list of benign diagnostics if necessary.
+
+5. **Medium — [rehearsal.yml](/home/ubuntu/code/getcolors/langfuse/src/resources/io/github/getcolors/langfuse/tools/ansible/rehearsal.yml:99):** The node-loss and Redis drills lack `always` recovery paths; if ingestion, restart, or polling fails, the play exits while ClickHouse node 1 remains stopped or the worker remains stopped, degrading the live deployment. **Fix:** Wrap each disruption in an Ansible `block` with an `always` section that restores the stopped service before propagating failure.
+
+6. **Medium — [langfuse-rehearsal.sh](/home/ubuntu/code/getcolors/langfuse/src/resources/io/github/getcolors/langfuse/tools/ansible/langfuse-rehearsal.sh:70):** The restore-and-boot gate verifies only root and generation observations; it never reads or asserts the restored score required by plan §28, so loss of the `scores` table can pass recovery verification. **Fix:** Query the supported scores API for the smoke trace and require the seeded `colors-smoke-score` before writing the recovery marker.
+
+None of these findings is speculative.
+
+### Claude's dispositions (round 1 of 2)
+
+1. **Media manifest without hashes** — accepted: every destination object's MD5 is recorded per run, and each run verifies that every object the previous run archived is still present with the same hash before writing its marker.
+2. **ClickHouse set verification** — accepted in the form that adds evidence: the bucket listing must equal what ClickHouse reports in `system.backups` (`num_files`, `total_size`) for that backup id. The incoming→final copy is rejected: the marker-last protocol already prevents a partial set from ever being selected, and the copy would double the S3 traffic of every nightly set for no additional guarantee.
+3. **Split buckets impossible for the media archive** — accepted: the backups play installs the Langfuse storage credential on the Neon host and the `store` remote prefers it over Neon's pair.
+4. **`pg_restore` errors discarded** — accepted: any `pg_restore: error:`/`warning:` line fails the restore except the one benign diagnostic (`must be owner of extension`, from `COMMENT ON EXTENSION plpgsql`).
+5. **Drills without an `always` path** — accepted: both drills are `block`/`always`; the replica and the worker are started again whatever the probe did.
+6. **Restored score not asserted** — accepted: the rehearsal reads `restore_check.scores` for the smoke trace through the application user (the Scores API v3 read path was not verified on this build and is not relied on).
+
+Rounds used: 2 (initial review + one reinspection after the fixes, below).

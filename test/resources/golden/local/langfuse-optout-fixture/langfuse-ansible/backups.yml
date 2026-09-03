@@ -24,11 +24,25 @@
           BACKUP_R2_SECRET_ACCESS_KEY={{ lookup('env','COLORS_PAR_LANGFUSE_BACKUP_R2_SECRET_ACCESS_KEY') }}
       no_log: true
 
+    # The Langfuse storage credential, for the media archive's SOURCE. Distinct
+    # from the Neon pair neon's play installs, so a deployment that splits the
+    # two buckets reads media with the right token.
+    - name: Install the storage credential for the media archive
+      ansible.builtin.copy:
+        dest: /etc/colors/store-r2.env
+        mode: "0600"
+        content: |
+          STORE_R2_ACCESS_KEY_ID={{ lookup('env','COLORS_PAR_LANGFUSE_STORAGE_R2_ACCESS_KEY_ID') }}
+          STORE_R2_SECRET_ACCESS_KEY={{ lookup('env','COLORS_PAR_LANGFUSE_STORAGE_R2_SECRET_ACCESS_KEY') }}
+      no_log: true
+
     - name: Refuse an empty backup credential
       ansible.builtin.shell: |
         set -euo pipefail
         grep -q '^BACKUP_R2_ACCESS_KEY_ID=..*' /etc/colors/backup-r2.env || { echo "empty backup key id" >&2; exit 1; }
         grep -q '^BACKUP_R2_SECRET_ACCESS_KEY=..*' /etc/colors/backup-r2.env || { echo "empty backup secret" >&2; exit 1; }
+        grep -q '^STORE_R2_ACCESS_KEY_ID=..*' /etc/colors/store-r2.env || { echo "empty store key id" >&2; exit 1; }
+        grep -q '^STORE_R2_SECRET_ACCESS_KEY=..*' /etc/colors/store-r2.env || { echo "empty store secret" >&2; exit 1; }
       args: {executable: /bin/bash}
       changed_when: false
 
