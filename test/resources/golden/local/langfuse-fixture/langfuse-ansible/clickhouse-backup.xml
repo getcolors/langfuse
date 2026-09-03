@@ -9,7 +9,13 @@
   <storage_configuration>
     <disks>
       <backups>
-        <type>s3</type>
+        <!-- s3_plain, not s3: a `type=s3` disk stores objects under random
+             keys and keeps the path mapping in LOCAL metadata, so a backup
+             written through it is 128 unnamed objects that only this node can
+             read back. s3_plain writes every file at its own path, which is
+             what makes a set restorable from anywhere and listable by the
+             backup scripts. -->
+        <type>s3_plain</type>
         <endpoint>https://fixture.r2.cloudflarestorage.com/langfuse-backup-fixture/langfuse-fixture/clickhouse/</endpoint>
         <access_key_id>{{ lookup('env','COLORS_PAR_LANGFUSE_BACKUP_R2_ACCESS_KEY_ID') }}</access_key_id>
         <secret_access_key>{{ lookup('env','COLORS_PAR_LANGFUSE_BACKUP_R2_SECRET_ACCESS_KEY') }}</secret_access_key>

@@ -50,6 +50,10 @@
         <query>GRANT SELECT ON system.one</query>
         <query>GRANT SELECT ON system.clusters</query>
         <query>GRANT SELECT ON system.zookeeper</query>
+        <!-- The rehearsal restores a set into restore_check and boots the
+             pinned image against it AS this user; without this the scratch
+             web answers 500 on every read. -->
+        <query>GRANT SELECT ON restore_check.*</query>
       </grants>
     </langfuse>
   </users>

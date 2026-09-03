@@ -48,8 +48,9 @@ tables=$(cq "SELECT count() FROM system.tables WHERE database = 'restore_check'"
 # {uuid} in default_replica_path plus the new UUIDs RESTORE assigns.
 collisions=$(cq "SELECT count() FROM system.replicas WHERE database = 'restore_check' AND zookeeper_path IN (SELECT zookeeper_path FROM system.replicas WHERE database = 'default')")
 [ "${collisions:-1}" = "0" ] || { echo "clickhouse-restore-check: $collisions restored tables share a Keeper path with the live database" >&2; exit 1; }
-traces=$(cq "SELECT count() FROM restore_check.traces" 2>/dev/null || echo "n/a")
+# events_full, not traces: on Langfuse v4 the traces table is migrated and empty.
+events=$(cq "SELECT count() FROM restore_check.events_full" 2>/dev/null || echo "n/a")
 
-echo "clickhouse-restore-check: restored $set into restore_check ($tables tables, $traces traces), paired with postgres set ${pg:-none}"
+echo "clickhouse-restore-check: restored $set into restore_check ($tables tables, $events event rows), paired with postgres set ${pg:-none}"
 echo "clickhouse_set=$set"
 echo "postgres_set=$pg"
