@@ -14,8 +14,14 @@ result=$(cq "BACKUP DATABASE default TO Disk('backups', '$STAMP/') SETTINGS asyn
 backup_id=$(printf '%s' "$result" | cut -f1); status=$(printf '%s' "$result" | cut -f2)
 [ "$status" = "BACKUP_CREATED" ] || { echo "clickhouse-backup: BACKUP returned '$status'" >&2; exit 1; }
 # What ClickHouse says it wrote, to compare with what the bucket holds.
-expected_files=$(cq "SELECT num_files FROM system.backups WHERE id = '$backup_id'")
-expected_bytes=$(cq "SELECT total_size FROM system.backups WHERE id = '$backup_id'")
+# system.backups has two counts and three sizes, and only one pair describes
+# the objects on the disk: num_entries is the number of stored entries
+# (num_files counts LOGICAL files, 459 against 179 objects on the live
+# build) and compressed_size is the bytes stored (total_size is the logical
+# size). The disk also holds the .backup metadata file, which is not an
+# entry, hence the +1.
+expected_files=$(( $(cq "SELECT num_entries FROM system.backups WHERE id = '$backup_id'") + 1 ))
+expected_bytes=$(cq "SELECT compressed_size FROM system.backups WHERE id = '$backup_id'")
 
 # Verify what landed: objects under the set, including ClickHouse's own
 # `.backup` metadata file, which it writes last.
