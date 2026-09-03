@@ -68,13 +68,14 @@ else
 fi
 
 if [ -n "$T" ]; then
-  r=$(curl -sS --max-time 30 -u "$PK:$SK" -w '\n%{http_code}' "http://127.0.0.1:$PORT/api/public/traces/$T")
+  # Observations API v2: the legacy /traces/:id route is 404 on v4.
+  r=$(curl -sS --max-time 30 -u "$PK:$SK" -w '\n%{http_code}' "http://127.0.0.1:$PORT/api/public/v2/observations?traceId=$T&fields=core,basic&limit=50")
   st=$(printf '%s' "$r" | tail -1); body=$(printf '%s' "$r" | sed '$d')
   if [ "$st" = "200" ]; then
-    counts=$(printf '%s' "$body" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d.get("observations",[])), len(d.get("scores",[])))' 2>/dev/null || echo "0 0")
+    counts=$(printf '%s' "$body" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("data",[]); print(sum(1 for x in d if x.get("isRootObservation")), sum(1 for x in d if x.get("type")=="GENERATION"))' 2>/dev/null || echo "0 0")
     set -- $counts
-    [ "${1:-0}" -ge 1 ] && [ "${2:-0}" -ge 1 ] && pass "R3 the smoke trace reads back from restored ClickHouse with its generation and score" \
-      || fail "R3 the smoke trace reads back but with $1 observations and $2 scores"
+    [ "${1:-0}" -ge 1 ] && [ "${2:-0}" -ge 1 ] && pass "R3 the smoke trace reads back from restored ClickHouse with its root and generation" \
+      || fail "R3 the smoke trace reads back with $1 roots and $2 generations"
   else
     fail "R3 the smoke trace $T answered $st through the scratch web"
   fi

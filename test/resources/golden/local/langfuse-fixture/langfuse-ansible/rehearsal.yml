@@ -169,8 +169,8 @@
       ansible.builtin.shell: |
         set -euo pipefail
         PK=$(cat /etc/langfuse/secrets/project_public_key); SK=$(cat /etc/langfuse/secrets/project_secret_key)
-        code=$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' -u "$PK:$SK" "http://127.0.0.1:3000/api/public/traces/{{ enqueued.stdout | trim }}")
-        [ "$code" = "200" ]
+        n=$(curl -sS --max-time 30 -u "$PK:$SK" "http://127.0.0.1:3000/api/public/v2/observations?traceId={{ enqueued.stdout | trim }}&limit=10" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("data",[])))')
+        [ "${n:-0}" -ge 2 ]
       args: {executable: /bin/bash}
       register: landed
       changed_when: false

@@ -1,5 +1,6 @@
 (ns io.github.getcolors.langfuse.workflow
-  (:require [green.cli :as green-cli]
+  (:require [clojure.walk :as walk]
+            [green.cli :as green-cli]
             [green.dry-run :as dry-run]
             [green.lifecycle :as lifecycle]
             [green.progress :as progress]
@@ -17,18 +18,23 @@
 (defn state-output
   "The compute stage's applied `params`, or nil when no state is readable. The
   create matrix keys on this best-effort read: an unreadable state (a fresh
-  clone, a missing backend) counts as absent."
+  clone, a missing backend) counts as absent.
+
+  Keywordized but otherwise UNTOUCHED: ONCE's create matrix reads `:ssh_key_id`
+  with the underscore from this map, and a renamed key reads as a key this
+  deployment does not own — the standard's never-adopt rule then refuses the
+  deployment's own key. The host list is normalized separately below."
   [opts]
   (try (some-> (tofu/outputs (tools/tool-dir opts tools/infrastructure-tool)
                              (tools/backend-credential-env opts))
-               :params tools/normalize-params)
+               :params walk/keywordize-keys)
        (catch Exception _ nil)))
 
 (defn- with-state-hosts
   "Events that run against existing machines (delete, rehearse, describe)
   take their addresses from state rather than from a fresh apply."
   [opts]
-  (let [params (state-output opts)]
+  (let [params (tools/normalize-params (state-output opts))]
     (cond-> opts
       (seq (:hosts params)) (assoc :langfuse/hosts (:hosts params)
                                    :langfuse/ssh-key-id (:ssh-key-id params)))))

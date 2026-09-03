@@ -367,18 +367,41 @@
 (defn- body-of [{:keys [out]}]
   (str/join "\n" (butlast (str/split-lines (str out)))))
 
-(defn smoke-trace-id [] (str "colors-operator-" (System/currentTimeMillis)))
+(defn hex-id
+  "An OTel id: `n` random bytes as lowercase hex (16 for a trace, 8 for a span)."
+  [n]
+  (let [bs (byte-array n)]
+    (.nextBytes (java.security.SecureRandom.) bs)
+    (apply str (map #(format "%02x" (bit-and % 0xff)) bs))))
 
-(defn ingestion-body [trace-id]
-  (json/generate-string
-   {:batch [{:id (str trace-id "-evt")
-             :type "trace-create"
-             :timestamp (str (java.time.Instant/now))
-             :body {:id trace-id
-                    :name "colors-operator-acceptance"
-                    :tags ["colors-operator"]
-                    :input {:path "public-name"}
-                    :output {:ok true}}}]}))
+(defn otlp-body
+  "One OTLP/JSON request: a root span named for the operator path, tagged so
+  it can be found, with the observation type and an input/output pair. This
+  is the v4 ingestion contract; the legacy batch endpoint rejects every event
+  on a fresh v4 deployment."
+  [trace-id span-id]
+  (let [now (* (System/currentTimeMillis) 1000000)
+        attr (fn [k v] {:key k :value {:stringValue v}})]
+    (json/generate-string
+     {:resourceSpans
+      [{:resource {:attributes [(attr "service.name" "colors-operator")]}
+        :scopeSpans
+        [{:scope {:name "colors-operator"}
+          :spans [{:traceId trace-id :spanId span-id :name "colors-operator-acceptance" :kind 1
+                   :startTimeUnixNano (str now) :endTimeUnixNano (str (+ now 1000000))
+                   :attributes [(attr "langfuse.observation.type" "span")
+                                (attr "langfuse.trace.name" "colors-operator-acceptance")
+                                {:key "langfuse.trace.tags"
+                                 :value {:arrayValue {:values [{:stringValue "colors-operator"}]}}}
+                                (attr "langfuse.observation.input" "public-name")
+                                (attr "langfuse.observation.output" "ok")]}]}]}]})))
+
+(defn observations-count
+  "How many observation rows the v2 API returns for a trace, from a curl
+  result, or 0 when the body is not what the API promises."
+  [r]
+  (try (count (:data (json/parse-string (body-of r) true)))
+       (catch Exception _ 0)))
 
 (defn acceptance-step
   "The operator-path gate, after a real create.
@@ -408,34 +431,36 @@
                :green/err "acceptance: could not read the generated project keys over ssh")
 
         :else
-        (let [trace-id (smoke-trace-id)
+        (let [trace-id (hex-id 16)
               auth (str pk ":" sk)
               ingest (run-quiet (curl-args "-u" auth "-H" "Content-Type: application/json"
-                                           "-X" "POST" "--data-binary" (ingestion-body trace-id)
-                                           (str base "/api/public/ingestion"))
+                                           "-H" "x-langfuse-ingestion-version: 4"
+                                           "-X" "POST" "--data-binary" (otlp-body trace-id (hex-id 8))
+                                           (str base "/api/public/otel/v1/traces"))
                                 {} 40000)
+              v2 (str base "/api/public/v2/observations?traceId=" trace-id "&limit=10")
               deadline (+ (System/currentTimeMillis) 120000)
               read-back (loop []
-                          (let [r (run-quiet (curl-args "-u" auth (str base "/api/public/traces/" trace-id)) {} 40000)]
+                          (let [r (run-quiet (curl-args "-u" auth v2) {} 40000)]
                             (cond
-                              (= "200" (status-of r)) r
+                              (and (= "200" (status-of r)) (pos? (observations-count r))) r
                               (< (System/currentTimeMillis) deadline) (do (Thread/sleep 5000) (recur))
                               :else r)))
-              denied (run-quiet (curl-args "-u" (str pk ":not-the-key") (str base "/api/public/traces/" trace-id)) {} 40000)
-              anonymous (run-quiet (curl-args (str base "/api/public/traces/" trace-id)) {} 40000)
+              denied (run-quiet (curl-args "-u" (str pk ":not-the-key") v2) {} 40000)
+              anonymous (run-quiet (curl-args v2) {} 40000)
               aliases (ssh-config/aliases opts)
               unreachable (remove (fn [a] (zero? (:exit (run-quiet ["ssh" "-o" "BatchMode=yes" a "true"] {} 20000))))
                                   aliases)]
           (cond
-            (not (contains? #{"200" "207"} (status-of ingest)))
+            (not= "200" (status-of ingest))
             (assoc opts :green/exit 1
-                   :green/err (str "acceptance: ingestion through the public name answered "
+                   :green/err (str "acceptance: OTLP ingestion through the public name answered "
                                    (status-of ingest) ": " (str/trim (body-of ingest))))
 
-            (not= "200" (status-of read-back))
+            (or (not= "200" (status-of read-back)) (zero? (observations-count read-back)))
             (assoc opts :green/exit 1
                    :green/err (str "acceptance: trace " trace-id " was not readable through the public name within 120s (last status "
-                                   (status-of read-back) ")"))
+                                   (status-of read-back) ", " (observations-count read-back) " rows)"))
 
             (= "200" (status-of denied))
             (assoc opts :green/exit 1

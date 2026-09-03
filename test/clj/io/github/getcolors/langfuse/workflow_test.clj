@@ -29,3 +29,12 @@
   (doseq [s [:langfuse/infrastructure :langfuse/dns :langfuse/ssh-config :langfuse/ansible
              :langfuse/acceptance :langfuse/ssh-cleanup :langfuse/rehearsal :langfuse/describe]]
     (is (some #{s} w/side-effecting) (str s " must be dry-run advised"))))
+
+(deftest normalized-params-keep-the-hosts-but-state-output-keeps-once-s-key
+  (testing "ONCE reads :ssh_key_id with the underscore from the state map; only
+            the host list is renamed into this package's vocabulary"
+    (let [raw {:ssh_key_id "k" :hosts [{:role "app" :index nil :ip "1.1.1.1" :vpc_ip "10.0.0.1"}]}
+          norm (io.github.getcolors.langfuse.tools/normalize-params raw)]
+      (is (= "k" (:ssh_key_id raw)))
+      (is (= "k" (:ssh-key-id norm)))
+      (is (= "10.0.0.1" (:vpc-ip (first (:hosts norm))))))))

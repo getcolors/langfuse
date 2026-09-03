@@ -49,6 +49,14 @@ for variant in colors optout; do
       || { echo "golden: $profile: $f no longer renders the backup credential as a lookup" >&2; exit 1; }
   done
 
+  # Every rendered ClickHouse XML file must be well-formed. A double dash
+  # inside an XML comment cost a live converge: ClickHouse fails to start with
+  # `SAXParseException: Invalid token`, on all three nodes, from a comment.
+  for x in "$actual"/langfuse-ansible/clickhouse-*.xml; do
+    python3 -c 'import sys, xml.dom.minidom; xml.dom.minidom.parse(sys.argv[1])' "$x" \
+      || { echo "golden: $x is not well-formed XML" >&2; exit 1; }
+  done
+
   # The storage tier arrives from the dependency, in its own subdirectory.
   [[ -f "$actual/langfuse-ansible/neon/compose.yml" ]] || { echo "golden: $profile has no neon/ bundle" >&2; exit 1; }
   # Six machines, four firewall groups, per-peer east-west rules.

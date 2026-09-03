@@ -193,6 +193,35 @@
         - {src: langfuse-monitor.sh, dest: /usr/local/sbin/langfuse-monitor}
         - {src: langfuse-rehearsal.sh, dest: /usr/local/sbin/langfuse-rehearsal}
 
+    # The storage tier's own smoke gate creates `colors_smoke` INSIDE the
+    # application database on every converge (it is that play's SQL
+    # round-trip), and Prisma refuses to apply Langfuse's migrations to a
+    # non-empty schema that carries no _prisma_migrations table yet:
+    #   Error: P3005  The database schema is not empty.
+    # Its hints (unreachable database, URL encoding) point nowhere near the
+    # cause. Drop the smoke table exactly once, before the first boot; after
+    # that the migrations table exists and Prisma ignores the smoke table the
+    # next converge recreates.
+    - name: Clear the storage tier's smoke table before Langfuse's first boot
+      ansible.builtin.shell: |
+        set -euo pipefail
+        url=$(sed -n 's/^DATABASE_URL=//p' /etc/langfuse/host.env)
+        q() { env -i PATH=/usr/bin:/bin PGCONNECT_TIMEOUT=10 psql -w "$url" -v ON_ERROR_STOP=1 -tAc "$1"; }
+        # The Neon compute sets no TimeZone, so Postgres reports the compiled
+        # default GMT; Langfuse requires the literal UTC. The role owns the
+        # database, so a database-level setting is within its rights and
+        # every new session inherits it.
+        q "ALTER DATABASE <{ neon-database }> SET timezone TO 'UTC'" >/dev/null
+        if [ -n "$(q "SELECT to_regclass('public._prisma_migrations')")" ]; then
+          echo "migrations table present; nothing to clear"
+        else
+          q "DROP TABLE IF EXISTS public.colors_smoke" >/dev/null
+          echo "CLEARED colors_smoke before the first boot"
+        fi
+      args: {executable: /bin/bash}
+      register: smoke_clear
+      changed_when: "'CLEARED' in smoke_clear.stdout"
+
     - ansible.builtin.meta: flush_handlers
 
     # Desired state must be enforced every run, not only when an input moved:

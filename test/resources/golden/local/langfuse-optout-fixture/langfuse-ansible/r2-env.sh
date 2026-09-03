@@ -13,6 +13,9 @@
 # what looks like a plain write); without no_head the post-upload verification
 # trips a 501; and `rclone rcat` is a 501 outright, so uploads are always a
 # copyto of a file with a known size.
+# No config file: rclone otherwise prints a NOTICE about the missing one on
+# every invocation, which reads like a fault in gate output.
+export RCLONE_CONFIG=/dev/null
 export RCLONE_CONFIG_STORE_TYPE=s3 RCLONE_CONFIG_STORE_PROVIDER=Cloudflare
 export RCLONE_CONFIG_STORE_ENDPOINT="https://fixture.r2.cloudflarestorage.com" RCLONE_CONFIG_STORE_REGION="auto"
 export RCLONE_CONFIG_STORE_NO_CHECK_BUCKET=true RCLONE_CONFIG_STORE_NO_HEAD=true

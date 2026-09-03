@@ -43,6 +43,13 @@
         <query>GRANT READ ON REMOTE</query>
         <query>GRANT CLUSTER ON *.*</query>
         <query>GRANT SYSTEM SYNC REPLICA, SYSTEM MERGES, ALTER SETTINGS ON default.observations_pid_tid_sorting</query>
+        <!-- This package's own gates, not Langfuse's: clusterAllReplicas over
+             system.one, the replica list, and the Keeper root. Without
+             system.one the cluster count fails with "Not enough privileges ...
+             SHOW COLUMNS ON system.one". -->
+        <query>GRANT SELECT ON system.one</query>
+        <query>GRANT SELECT ON system.clusters</query>
+        <query>GRANT SELECT ON system.zookeeper</query>
       </grants>
     </langfuse>
   </users>

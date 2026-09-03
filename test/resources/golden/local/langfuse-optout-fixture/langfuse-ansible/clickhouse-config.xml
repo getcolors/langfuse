@@ -59,9 +59,12 @@
 
   <!-- The six system log tables Langfuse never reads, removed; they have no
        TTL by default and the profiler writes trace_log continuously.
-       query_log, part_log and error_log stay -- v4 reads system.query_log*
-       for migration progress and usage detection -- bounded to thirty days.
-       TTL clauses apply when a table is first created. -->
+       query_log, part_log and error_log stay: v4 reads system.query_log*
+       for migration progress and usage detection, bounded to thirty days
+       through the `ttl` setting rather than an `engine` override: the base
+       config already sets `partition_by` for these tables, and ClickHouse
+       refuses an engine clause beside it. TTL applies when a table is first
+       created. -->
   <trace_log remove="1"/>
   <text_log remove="1"/>
   <opentelemetry_span_log remove="1"/>
@@ -69,12 +72,12 @@
   <metric_log remove="1"/>
   <latency_log remove="1"/>
   <query_log>
-    <engine>ENGINE = MergeTree PARTITION BY toYYYYMM(event_date) ORDER BY (event_date, event_time) TTL event_date + INTERVAL 30 DAY</engine>
+    <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
   </query_log>
   <part_log>
-    <engine>ENGINE = MergeTree PARTITION BY toYYYYMM(event_date) ORDER BY (event_date, event_time) TTL event_date + INTERVAL 30 DAY</engine>
+    <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
   </part_log>
   <error_log>
-    <engine>ENGINE = MergeTree PARTITION BY toYYYYMM(event_date) ORDER BY (event_date, event_time) TTL event_date + INTERVAL 30 DAY</engine>
+    <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
   </error_log>
 </clickhouse>

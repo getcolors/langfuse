@@ -64,8 +64,18 @@
     (is (= 1 (:ttl body)))
     (is (true? (:proxied body)))))
 
-(deftest the-ingestion-body-is-one-trace-tagged-for-the-operator-path
-  (let [b (json/parse-string (tools/ingestion-body "t-1") true)]
-    (is (= 1 (count (:batch b))))
-    (is (= "trace-create" (:type (first (:batch b)))))
-    (is (= "t-1" (get-in b [:batch 0 :body :id])))))
+(deftest the-operator-path-ingests-one-otlp-root-span
+  (testing "v4 ingestion is OTLP: one root span, 32-hex trace id, tagged so the
+            read-back can find it; the legacy batch endpoint rejects everything"
+    (let [t (tools/hex-id 16) s (tools/hex-id 8)
+          b (json/parse-string (tools/otlp-body t s) true)
+          span (get-in b [:resourceSpans 0 :scopeSpans 0 :spans 0])]
+      (is (re-matches #"[0-9a-f]{32}" t))
+      (is (re-matches #"[0-9a-f]{16}" s))
+      (is (= t (:traceId span)))
+      (is (some #(= "langfuse.trace.tags" (:key %)) (:attributes span)))
+      (is (= "span" (get-in (first (filter #(= "langfuse.observation.type" (:key %)) (:attributes span))) [:value :stringValue]))))))
+
+(deftest observation-rows-are-counted-defensively
+  (is (= 2 (tools/observations-count {:out "{\"data\":[{},{}]}\n200"})))
+  (is (= 0 (tools/observations-count {:out "not json\n502"}))))

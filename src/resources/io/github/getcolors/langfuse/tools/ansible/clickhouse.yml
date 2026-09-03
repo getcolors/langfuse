@@ -58,8 +58,12 @@
       environment:
         DEBIAN_FRONTEND: noninteractive
 
-    - name: Create the secrets directory
-      ansible.builtin.file: {path: "{{ ch_secrets_dir }}", state: directory, mode: "0700"}
+    - name: Create the directories the scripts and secrets live in
+      ansible.builtin.file: {path: "{{ item.path }}", state: directory, mode: "{{ item.mode }}"}
+      loop:
+        - {path: "{{ ch_secrets_dir }}", mode: "0700"}
+        - {path: /opt/colors, mode: "0755"}
+        - {path: /etc/colors, mode: "0755"}
 
     # Generated on node 0 only, create-once, and never supplied by the operator:
     # the admin and langfuse passwords, the interserver credential replicas
