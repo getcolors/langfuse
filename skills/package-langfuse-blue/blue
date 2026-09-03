@@ -1,15 +1,22 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["package-langfuse-blue", "blue"]
+#
+# [tool.uv.sources]
+# package-langfuse-blue = { git = "https://github.com/getcolors/langfuse.git", rev = "c18f2540b609672159aa7e31ca3ab89a132a48a4", subdirectory = "blue" }
+# package-neon-blue = { git = "https://github.com/getcolors/neon.git", rev = "87c009549a928fdf1f9dc135f9740c3baa5782d7", subdirectory = "blue" }
+# package-once-blue = { git = "https://github.com/getcolors/once.git", rev = "759eb0311b4bdf881eab813cfe5d00f76b9310cc", subdirectory = "blue" }
+# blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
+#
+# [tool.uv]
+# override-dependencies = ["blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09"]
 # ///
 #
 # Managed by `bb pin` — do not edit by hand, and never invent a SHA.
 #
-# UNPINNED: this payload carries no langfuse pin yet. `bb pin` cannot run until
-# the langfuse repository has been pushed, and stamping rewrites the metadata
-# block above with the git sources. Meanwhile point it at a checkout:
-# LANGFUSE_LIB_ROOT=/path/to/langfuse
+# Stamped by `bb pin`. LANGFUSE_LIB_ROOT=/path/to/langfuse still overrides the
+# pin with a working tree.
 """Thin launcher for package-langfuse-blue.
 
 This file is both the skill payload and the repository entry point —

@@ -42,7 +42,7 @@ import { homedir } from "node:os";
 // directory, which would halt Bun's upward resolution of `package-langfuse-red`
 // and break the development symlink at red/red.
 const PINS = {
-  "package-langfuse-red": null,
+  "package-langfuse-red": "github:getcolors/langfuse#c18f2540b609672159aa7e31ca3ab89a132a48a4",
   "package-neon-red": "github:getcolors/neon#87c009549a928fdf1f9dc135f9740c3baa5782d7",
   "package-once-red": "github:getcolors/once#759eb0311b4bdf881eab813cfe5d00f76b9310cc",
   "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e",
