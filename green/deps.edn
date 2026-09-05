@@ -14,7 +14,7 @@
         ;; ~/.ssh, and this package's SSH behaviour is that namespace. The ONCE
         ;; pin cannot go below either.
         io.github.getcolors/once  {:git/url "https://github.com/getcolors/once.git"
-                                   :git/sha "b1628b7f8546c10fa9b768565bfd839512cb49ca"
+                                   :git/sha "10e525ae7c37130ab4d532b91c8d2ead94557cc8"
                                    :deps/root "green"}
         ;; The whole storage tier. This package renders neon's Ansible
         ;; templates straight off the classpath -- deps.edn there publishes

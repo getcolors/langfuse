@@ -6,11 +6,11 @@
 # [tool.uv.sources]
 # package-langfuse-blue = { git = "https://github.com/getcolors/langfuse.git", rev = "e224dca4ab2979b8b85d43d5f0a775c1bc33c2d4", subdirectory = "blue" }
 # package-neon-blue = { git = "https://github.com/getcolors/neon.git", rev = "87c009549a928fdf1f9dc135f9740c3baa5782d7", subdirectory = "blue" }
-# package-once-blue = { git = "https://github.com/getcolors/once.git", rev = "b1628b7f8546c10fa9b768565bfd839512cb49ca", subdirectory = "blue" }
+# package-once-blue = { git = "https://github.com/getcolors/once.git", rev = "10e525ae7c37130ab4d532b91c8d2ead94557cc8", subdirectory = "blue" }
 # blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
 #
 # [tool.uv]
-# override-dependencies = ["blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09", "package-once-blue @ git+https://github.com/getcolors/once.git@b1628b7f8546c10fa9b768565bfd839512cb49ca#subdirectory=blue"]
+# override-dependencies = ["blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09", "package-once-blue @ git+https://github.com/getcolors/once.git@10e525ae7c37130ab4d532b91c8d2ead94557cc8#subdirectory=blue"]
 # ///
 #
 # Managed by `bb pin` — do not edit by hand, and never invent a SHA.

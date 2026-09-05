@@ -6,7 +6,7 @@
       "name": "package-langfuse-red-dev",
       "dependencies": {
         "package-neon-red": "github:getcolors/neon#87c009549a928fdf1f9dc135f9740c3baa5782d7",
-        "package-once-red": "github:getcolors/once#b1628b7f8546c10fa9b768565bfd839512cb49ca",
+        "package-once-red": "github:getcolors/once#10e525ae7c37130ab4d532b91c8d2ead94557cc8",
         "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e",
       },
       "devDependencies": {
@@ -64,7 +64,7 @@
 
     "package-neon-red": ["package-neon-red@github:getcolors/neon#87c0095", { "peerDependencies": { "package-once-red": "*", "red": "*" }, "optionalPeers": ["package-once-red", "red"] }, "getcolors-neon-87c0095", "sha512-jevsZJgJvhTTba19qNDDIWH5WqUx444FjhsAGGB/smFh6AYAvuWBovHjAk/IXPVicLRARwNzD9YF8VAtZvl8Bg=="],
 
-    "package-once-red": ["package-once-red@github:getcolors/once#b1628b7", { "peerDependencies": { "red": "*" }, "optionalPeers": ["red"] }, "getcolors-once-b1628b7", "sha512-K5TATjm7tG+5BlLvIFUIUtgV2n0E128YjnDpUixp/+PSF2yEA73AXHbUwZte9Tkpk2lznT0QEj4ttwNYVgUXTQ=="],
+    "package-once-red": ["package-once-red@github:getcolors/once#10e525a", { "peerDependencies": { "red": "*" }, "optionalPeers": ["red"] }, "getcolors-once-10e525a", "sha512-7MNd1LFMFwWtMN99/cyv04BEYJcYgVUXGLZUfxxdW4iNX2dweJxaoLYuP87B71+ZmKcR36lASDeZS+ucW24Gzg=="],
 
     "red": ["red@github:getcolors/red#db9bfe6", { "dependencies": { "zod": "^4.0.0" } }, "getcolors-red-db9bfe6", "sha512-3uHKgJeICb/ljQxiTzLTLUdFNfNqvzPGv08X4LRVOU5uk7wmT7wEuVag/xhj87Qn6tvCtAG8uDp8IbIROBGmmg=="],
 
