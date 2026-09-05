@@ -9,7 +9,8 @@ stanza this package did not write.
 Unlike the keypair, this play is the package's own copy rather than ONCE's
 (standard §7). The file is shared with every other host the operator reaches,
 so an unrelated change upstream must not be able to rewrite it at pin-bump
-time.
+time. The alias list, though, is the Compute Cluster Standard's (§6) and comes
+from ONCE.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+
+from package_once_blue import compute_cluster as once_cluster
 
 from . import topology
 
@@ -35,17 +38,28 @@ def identity_file(opts: dict) -> str:
     return f"~/.ssh/{host_alias(opts)}"
 
 
-def machine_alias(opts: dict, host: dict) -> str:
-    """The alias for one machine: its label, `<profile>-<role>[-<i>]`."""
-    return host["name"]
-
-
 def aliases(opts: dict) -> list[str]:
-    """Every alias this deployment owns: the bare profile, and one per machine.
-    Six machines are operable only if each can be reached by name; the bare
-    profile keeps `ssh <profile>` meaning what it means in every other
-    deployment."""
-    return [host_alias(opts), *(machine_alias(opts, h) for h in topology.hosts(opts))]
+    """Every alias this deployment owns: the bare profile, and one per machine
+    — `<profile>-<role>` for the singletons, `<profile>-clickhouse-<i>` for
+    the replicas. ONCE derives the list from the spec (Compute Cluster
+    Standard §6). Six machines are operable only if each can be reached by
+    name; the bare profile keeps `ssh <profile>` meaning what it means in
+    every other deployment."""
+    return once_cluster.aliases(topology.spec, opts)
+
+
+def machine_alias(opts: dict, host: dict) -> str:
+    """The alias for one machine: its entry in ONCE's list, paired with the
+    host by id. Derived from the profile, not from the machine's label, so an
+    operator who set `vultr-name` still reaches every machine as
+    `<profile>-<role>[-<i>]`."""
+    _profile, *per_node = aliases(opts)
+    index = host.get("index")
+    wanted = {"role": host.get("role"), "index": 0 if index is None else index}
+    for alias, id in zip(per_node, once_cluster.node_ids(topology.spec, opts)):
+        if id == wanted:
+            return alias
+    return ""
 
 
 def config_path() -> Path:

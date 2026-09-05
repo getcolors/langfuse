@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import * as sc from "../src/ssh-config.ts";
+import * as topology from "../src/topology.ts";
 
-const opts = { profile: "langfuse-test", "vultr-vpc-subnet": "10.50.0.0/24" };
+const opts = { profile: "langfuse-test", "provider-compute": "vultr", "vultr-vpc-subnet": "10.50.0.0/24" };
 
 describe("ssh-config", () => {
   test("the bare profile plus one alias per machine", () => {
@@ -11,6 +12,14 @@ describe("ssh-config", () => {
       "langfuse-test-app",
     ]);
     expect(sc.identityFile(opts)).toBe("~/.ssh/langfuse-test");
+    // The aliases follow the profile, not the machine label (Compute Cluster
+    // Standard §6).
+    const renamed = { ...opts, "vultr-name": "custom" };
+    expect(sc.machineAlias(renamed, { role: "clickhouse", index: 1, name: "custom-clickhouse-1" } as topology.Host))
+      .toBe("langfuse-test-clickhouse-1");
+    expect(sc.machineAlias(renamed, { role: "app", index: null, name: "custom-app" } as topology.Host))
+      .toBe("langfuse-test-app");
+    expect(topology.hosts(renamed).map((h) => sc.machineAlias(renamed, h))).toEqual(sc.aliases(renamed).slice(1));
   });
 
   test("a foreign stanza for any alias is detected", () => {

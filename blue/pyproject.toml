@@ -13,7 +13,7 @@ dependencies = [
 blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
 # bc06f2f is where ONCE moved the machine keypair into the operator's ~/.ssh;
 # this package's SSH behaviour is that module, so the pin cannot go below it.
-package-once-blue = { git = "https://github.com/getcolors/once.git", subdirectory = "blue", rev = "759eb0311b4bdf881eab813cfe5d00f76b9310cc" }
+package-once-blue = { git = "https://github.com/getcolors/once.git", subdirectory = "blue", rev = "b1628b7f8546c10fa9b768565bfd839512cb49ca" }
 # The whole storage tier. This package renders neon's Ansible templates
 # straight out of the installed distribution — blue ships them inside
 # `package_neon_blue/resources/` — so `compose.yml`, `main.yml`,
@@ -36,7 +36,7 @@ package-neon-blue = { git = "https://github.com/getcolors/neon.git", subdirector
 [tool.uv]
 override-dependencies = [
     "blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09",
-    "package-once-blue @ git+https://github.com/getcolors/once.git@759eb0311b4bdf881eab813cfe5d00f76b9310cc#subdirectory=blue",
+    "package-once-blue @ git+https://github.com/getcolors/once.git@b1628b7f8546c10fa9b768565bfd839512cb49ca#subdirectory=blue",
 ]
 
 [dependency-groups]

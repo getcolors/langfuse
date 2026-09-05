@@ -4,26 +4,88 @@
 // Six machines carry far more derived identity than one: a ClickHouse replica
 // that names a peer wrongly forms no quorum, an app host that points at a
 // stale VPC address fails only after the migration timeout, and a firewall
-// rule sourced from the wrong `/32` is a silent denial. Everything here is a
-// pure function of desired state plus the compute stage's output, so the whole
-// of it is reachable from the test suite and visible in the goldens. Nothing
-// in this file may read the environment, the filesystem, or the network.
+// rule sourced from the wrong `/32` is a silent denial.
+//
+// The node set itself — the six ids, the fallback addresses a `build` renders
+// with, the aliases, and the refusal of a state that does not describe every
+// machine — is the Compute Cluster Standard's
+// (`workspace/standards/compute-cluster.md`) and is ONCE's `computeCluster`
+// module, called with the `spec` below and never copied. What stays here is
+// Langfuse's: the roles and their fixed counts, the per-role plan key, the
+// host lookups the plays and the DNS stage use, and the ports. Everything here
+// is a pure function of desired state plus the compute stage's output, so the
+// whole of it is reachable from the test suite and visible in the goldens.
+// Nothing in this file may read the environment, the filesystem, or the
+// network.
 
 import type { Opts } from "red/workflow";
+import { compute, computeCluster } from "package-once-red";
+
+// ---------------------------------------------------------------- the spec
+
+// provider-compute -> what that choice implies.
+//
+// `required` are the non-secret keys the provider's template interpolates,
+// `secrets` the credentials it needs through COLORS_PAR_*, `tofuEnv` the
+// subset OpenTofu reads from the process environment itself, and `network` the
+// private network every database connection crosses — created by this package
+// from `vultr-vpc-subnet`, never discovered. Keeping them together is what
+// stops a provider being validated against one set of keys and run with
+// another. The keys of this map are the advertised providers; Vultr is the
+// only one this package has a template and a golden for.
+//
+// Two keys the template reads are deliberately not required. `vultr-name` is
+// an optional override of the profile (Compute Name Standard), and
+// `vultr-ssh-keys` is meaningful by its absence (SSH Keypair Standard).
+// `vultr-http-sources` is required but deliberately NOT one of the spec's
+// `sources`: it accepts the symbolic value `cloudflare`, which the package
+// resolves itself (see `tools.httpSources`).
+export const computeProviders: computeCluster.ClusterRegistry = {
+  vultr: {
+    required: ["vultr-region", "vultr-os-id", "vultr-vpc-subnet",
+      "vultr-plan-neon", "vultr-plan-redis", "vultr-plan-clickhouse", "vultr-plan-app",
+      "vultr-ssh-sources", "vultr-http-sources"],
+    secrets: ["vultr-api-key"],
+    tofuEnv: { "vultr-api-key": "VULTR_API_KEY" },
+    network: { mode: "created", key: "vultr-vpc-subnet" },
+  },
+};
+
+// The provider a deployment created before this package recorded one in its
+// compute output must be running: the only one it ever offered.
+export const defaultComputeProvider = "vultr";
 
 export const clickhouseNodeCount = 3;
 
+// How this package describes itself to ONCE's `computeCluster`. Four roles in
+// play order — `app` last because it is the consumer of the other three — with
+// fixed counts: one shard of three ClickHouse replicas, and one machine each
+// for the storage tier, the cache and the application. The bare `<profile>`
+// alias reaches the app host, the machine an operator most often means. The
+// fallback offsets are where each role's placeholder landed inside the subnet
+// before adoption, so the committed goldens carry the same addresses: 10, 11,
+// 12 for the singletons and 20-22 for the replicas.
+export const spec: computeCluster.ClusterSpec = {
+  registry: computeProviders,
+  default: defaultComputeProvider,
+  sources: { nonEmpty: ["ssh-sources"], mayBeEmpty: [] },
+  roles: [
+    { role: "neon", count: 1, fallbackOffset: 10 },
+    { role: "redis", count: 1, fallbackOffset: 11 },
+    { role: "clickhouse", count: clickhouseNodeCount, fallbackOffset: 20 },
+    { role: "app", count: 1, fallbackOffset: 12 },
+  ],
+  entry: { role: "app", index: 0 },
+};
+
 export type Role = "neon" | "redis" | "clickhouse" | "app";
 
-// The roles in play order. `app` is last because it is the consumer of the
-// other three.
-export const roles: Role[] = ["neon", "redis", "clickhouse", "app"];
+// The roles in play order.
+export const roles: Role[] = spec.roles.map((r) => r.role as Role);
 
-export interface HostId {
-  role: Role;
-  index: number | null;
-}
-
+// A host as this package's renderers read it: ONCE's five fields with `vpc-ip`
+// in the package's kebab spelling, a null index on the singletons, plus
+// whatever else the template recorded.
 export interface Host {
   role: string;
   index: number | null;
@@ -32,151 +94,71 @@ export interface Host {
   "vpc-ip": string;
   user: string;
   sudoer: string;
-}
-
-// The compute stage's `hosts` output, in this package's vocabulary.
-export interface HostParam {
-  role?: unknown;
-  index?: unknown;
-  ip?: unknown;
-  "vpc-ip"?: unknown;
-  user?: unknown;
-  sudoer?: unknown;
-  [key: string]: unknown;
-}
-
-function str(value: unknown): string {
-  return value === null || value === undefined ? "" : String(value);
-}
-
-function blank(value: unknown): boolean {
-  return str(value).trim() === "";
+  [extra: string]: unknown;
 }
 
 // The deployment's base machine name (Compute Name Standard §1-2): the
-// profile, unless desired state overrides it with `vultr-name`.
+// profile, unless desired state overrides it with `vultr-name`. ONCE's, so
+// every label derives from the same value.
 export function computeName(opts: Opts): string {
-  const override = str(opts["vultr-name"]);
-  if (blank(override) || override.trim() === "REPLACE_ME") return str(opts.profile);
-  return override.trim();
+  return compute.computeName(opts);
 }
 
 // The label of a machine: `<name>-<role>` for the singletons and
-// `<name>-clickhouse-<i>` for the replicas.
+// `<name>-clickhouse-<i>` for the replicas — the Cluster Standard's fallback
+// name, which is also what the template labels the instance.
 export function machineName(opts: Opts, role: string, index?: number | null): string {
-  const base = `${computeName(opts)}-${role}`;
-  return index === null || index === undefined ? base : `${base}-${index}`;
-}
-
-export function clickhouseIndexes(): number[] {
-  return Array.from({ length: clickhouseNodeCount }, (_, i) => i);
-}
-
-// Every machine this deployment claims, as `{role, index}` in play order.
-// `index` is null for the singletons and the replica ordinal for ClickHouse.
-export function hostIds(): HostId[] {
-  return [
-    { role: "neon", index: null },
-    { role: "redis", index: null },
-    ...clickhouseIndexes().map((i): HostId => ({ role: "clickhouse", index: i })),
-    { role: "app", index: null },
-  ];
-}
-
-export function hostName(opts: Opts, id: HostId): string {
-  return machineName(opts, id.role, id.index);
+  return computeCluster.fallbackNodeName(spec, opts, { role, index: index ?? 0 });
 }
 
 export function planKey(role: string): string {
   return `vultr-plan-${role}`;
 }
 
-// ------------------------------------------------------------------ fallback
-
-// The network address of `vultr-vpc-subnet`, `10.50.0.0/24` -> `10.50.0.0`.
-export function vpcBlock(opts: Opts): string {
-  return str(opts["vultr-vpc-subnet"] ?? "10.50.0.0/24").split("/")[0]!;
-}
-
-function placeholderVpcIp(opts: Opts, offset: number): string {
-  const octets = vpcBlock(opts).split(".");
-  return [...octets.slice(0, 3), String(offset)].join(".");
-}
-
-// Where each role's placeholder lands inside the subnet on a credential-free
-// build. Documentation ranges (RFC 5737 for the public side), fixed so a
-// build is byte-identical on every workstation.
-const fallbackOffsets: Record<Role, number> = { neon: 10, redis: 11, app: 12, clickhouse: 20 };
-
-export function fallbackHost(opts: Opts, id: HostId): Host {
-  const offset = fallbackOffsets[id.role] + (id.index ?? 0);
-  return {
-    role: id.role,
-    index: id.index,
-    name: hostName(opts, id),
-    ip: `192.0.2.${offset}`,
-    "vpc-ip": placeholderVpcIp(opts, offset),
-    user: "root",
-    sudoer: "root",
-  };
-}
-
-export function fallbackHosts(opts: Opts): Host[] {
-  return hostIds().map((id) => fallbackHost(opts, id));
-}
-
 // --------------------------------------------------------------------- hosts
 
-function keyOf(role: unknown, index: unknown): string {
-  const i = typeof index === "number" ? Math.trunc(index) : null;
-  return `${str(role)}/${i === null ? "" : i}`;
+// Whether `role` is declared with a count of one.
+function singletonRole(role: unknown): boolean {
+  return computeCluster.nodeCount(spec, {}, role as string | null) === 1;
 }
 
-function byKey(params: HostParam[]): Map<string, HostParam> {
-  const map = new Map<string, HostParam>();
-  for (const p of params) map.set(keyOf(p.role, p.index), p);
-  return map;
+// One of ONCE's nodes as this package's renderers read it. Two respellings,
+// both at this boundary so every rendered file stays byte-identical: ONCE
+// records `vpc_ip` with the underscore where the templates, the inventory and
+// the firewall data were written against `vpc-ip`; and ONCE gives every node
+// an index (a singleton's is 0) where the inventory writes an `ordinal` only
+// for the replicas, so a singleton's index reads as null here. Nothing else is
+// touched: the name is the label the template gave the instance, never
+// recomputed, and extension fields ride through.
+function langfuseHost(node: computeCluster.Node): Host {
+  const { vpc_ip, ...rest } = node;
+  const host = { ...rest, "vpc-ip": vpc_ip as string } as Host;
+  if (singletonRole(node.role)) host.index = null;
+  return host;
+}
+
+// What a credential-free `build` renders in place of a compute output: ONCE's
+// fallbacks — public addresses from `192.0.2.0/24`, private ones cut from
+// `vultr-vpc-subnet`, each at its role's offset — so a build is byte-identical
+// on every workstation and the committed goldens mean something.
+export function fallbackHosts(opts: Opts): Host[] {
+  return computeCluster.fallbackNodes(spec, opts).map(langfuseHost);
 }
 
 // The host list the Ansible stage, the DNS stage and the acceptance consume.
 //
-// `params` is the compute stage's `hosts` output. On a build there is none, so
-// the fallbacks stand in. On a real run a missing or short list is a hard
-// error rather than a silent partial cluster (see `missingHostError`).
-export function hosts(opts: Opts, params?: HostParam[] | null): Host[] {
-  const list = params === undefined ? (opts["langfuse/hosts"] as HostParam[] | undefined) : params;
-  if (!list || list.length === 0) return fallbackHosts(opts);
-  const known = byKey(list);
-  return hostIds().map((id) => {
-    const p = known.get(keyOf(id.role, id.index));
-    const host = fallbackHost(opts, id);
-    if (!p) return host;
-    // `select-keys`: only the keys the param carries override the fallback.
-    if ("ip" in p) host.ip = p.ip as string;
-    if ("vpc-ip" in p) host["vpc-ip"] = p["vpc-ip"] as string;
-    if ("user" in p) host.user = p.user as string;
-    if ("sudoer" in p) host.sudoer = p.sudoer as string;
-    return host;
-  });
-}
-
-// The error for a compute output that does not cover every machine, or that
-// omits an address. Returned rather than thrown so the workflow reports it the
-// way it reports every other failure.
-export function missingHostError(opts: Opts, params?: HostParam[] | null): string | undefined {
-  if (!params || params.length === 0) return undefined;
-  const known = byKey(params);
-  const missing = hostIds().filter((id) => {
-    const p = known.get(keyOf(id.role, id.index));
-    return !(p && !blank(p.ip) && !blank(p["vpc-ip"]));
-  });
-  if (missing.length === 0) return undefined;
-  return "the compute stage did not report an address for " +
-    missing.map((id) => hostName(opts, id)).join(", ") +
-    ". Refusing to render a partial deployment: a ClickHouse cluster " +
-    "config naming fewer replicas than exist forms no quorum, and an " +
-    "app environment pointing at a missing address fails only after " +
-    "the migration timeout.";
+// `params` is the compute stage's recorded `params` map, adopted under
+// `once/cluster` on a real run. On a build there is none, so the fallbacks
+// stand in. On a real run ONCE refuses a state that does not describe every
+// declared machine with every field, and never substitutes a fallback: a
+// ClickHouse cluster config naming fewer replicas than exist forms no quorum,
+// and an app environment pointing at a missing address fails only after the
+// migration timeout.
+export function hosts(opts: Opts, params?: computeCluster.ClusterParams | null): Host[] {
+  const recorded = params === undefined
+    ? (opts["once/cluster"] as computeCluster.ClusterParams | undefined)
+    : params;
+  return computeCluster.nodes(spec, opts, recorded).map(langfuseHost);
 }
 
 // The single host for `role`, or the `i`th ClickHouse node.

@@ -1,12 +1,21 @@
 import { parName } from "red/cli";
 import type { Opts } from "red/workflow";
-import { providers } from "package-once-red";
+import { compute, computeCluster, providers } from "package-once-red";
 import { onceSsh } from "./once.ts";
 import * as topology from "./topology.ts";
 
 export const profilePar = parName("profile");
 
-// Every key desired state must carry.
+// The registry and the spec live in `topology`, which every host derivation
+// needs and which this module already depends on for the ClickHouse count;
+// they are named here too so the lifecycle reads them from the validator, as
+// the other delegating packages do.
+export const computeProviders = topology.computeProviders;
+export const defaultComputeProvider = topology.defaultComputeProvider;
+export const spec = topology.spec;
+
+// Every key desired state must carry whichever provider is selected. The
+// provider-scoped keys come from `computeProviders`.
 //
 // Two deliberate absences carried over from `neon`: `vultr-ssh-keys` selects
 // opt-out mode by being present (SSH Keypair Standard), so requiring it would
@@ -44,10 +53,6 @@ export const required = [
   "langfuse-media-backup-max-age-hours",
   // public name and TLS
   "cloudflare-zone", "cloudflare-record-name", "cloudflare-proxied",
-  // compute
-  "vultr-region", "vultr-os-id", "vultr-vpc-subnet",
-  "vultr-plan-neon", "vultr-plan-redis", "vultr-plan-clickhouse", "vultr-plan-app",
-  "vultr-ssh-sources", "vultr-http-sources",
   "r2-bucket", "r2-endpoint",
 ];
 
@@ -62,7 +67,6 @@ const slugRe = /^[a-z0-9][a-z0-9-]*$/;
 const urlRe = /^https:\/\/[^\s]+$/;
 const hostRe = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 const emailRe = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const cidrV4Re = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
 const clickhouseVersionRe = /^(\d+)\.(\d+)\.\d+\.\d+$/;
 const versionTagRe = /:([^\s:@/]+)@sha256:/;
 
@@ -133,15 +137,16 @@ function clickhouseVersionOk(value: unknown): boolean {
   return major > 25 || (major === 25 && minor >= 12);
 }
 
+// Every problem with desired state at once: the missing keys (this package's
+// and the selected provider's), the package's own checks, then the Compute
+// Cluster Standard's — selection, the SSH source list, the provider rules, the
+// created network's CIDR and the topology — which are ONCE's over `spec`.
 export function stateErrors(opts: Opts): string[] {
   const errors: string[] = [];
-  for (const key of required) {
+  for (const key of [...required, ...compute.requiredKeys(spec, opts)]) {
     if (missing(opts[key])) errors.push(`:${key} is required`);
   }
 
-  if (opts["provider-compute"] !== "vultr") {
-    errors.push(":provider-compute must be vultr");
-  }
   if (opts["provider-dns"] !== "cloudflare") {
     errors.push(":provider-dns must be cloudflare");
   }
@@ -275,9 +280,6 @@ export function stateErrors(opts: Opts): string[] {
   }
 
   // --- network ----------------------------------------------------------------
-  if (!missing(opts["vultr-vpc-subnet"]) && !cidrV4Re.test(s(opts["vultr-vpc-subnet"]))) {
-    errors.push(":vultr-vpc-subnet must be an IPv4 CIDR, e.g. 10.50.0.0/24");
-  }
   // Restricting the origin to Cloudflare's ranges and NOT proxying the record
   // are mutually exclusive, and the failure is silent until the certificate is
   // needed: Caddy answers the ACME HTTP-01 challenge on :80, and with the
@@ -290,10 +292,13 @@ export function stateErrors(opts: Opts): string[] {
         ["split", "shared-accepted"].includes(s(opts["r2-credential-sharing"])))) {
     errors.push(":r2-credential-sharing must be split or shared-accepted");
   }
-  const osId = opts["vultr-os-id"];
-  if (!(missing(osId) || (typeof osId === "number" && Number.isInteger(osId)))) {
-    errors.push(":vultr-os-id must be Vultr's numeric operating-system id");
-  }
+
+  // --- compute: the Compute Cluster Standard's checks are ONCE's over the
+  // spec — selection, the SSH source list, the Vultr os id and name rules, the
+  // canonical VPC CIDR, and the six fallback addresses inside it.
+  // `vultr-http-sources` is not among them: it accepts the symbolic
+  // `cloudflare`, resolved by this package, and its one rule is above.
+  errors.push(...computeCluster.stateErrors(spec, opts));
   return errors;
 }
 
@@ -301,8 +306,9 @@ export function backendSecrets(opts: Opts): string[] {
   return providers["provider-backend"]?.[String(opts["provider-backend"])]?.secrets ?? [];
 }
 
-// What talking to the providers needs, on any real event.
-export const providerSecrets = ["vultr-api-key", "cloudflare-api-token"];
+// What talking to Cloudflare needs, on any real event. The compute provider's
+// credential comes from the registry.
+export const dnsSecrets = ["cloudflare-api-token"];
 
 // The two pairs that reach hosts on a create. `neon-r2-*` is what the
 // getcolors/neon play reads for the storage tier; `langfuse-storage-r2-*` is
@@ -323,12 +329,15 @@ function samePair(opts: Opts, a: string, b: string): boolean {
   return !missing(opts[a]) && s(opts[a]) === s(opts[b]);
 }
 
-// Credentials a real event needs. A delete tears down infrastructure and never
-// converges anything, so it asks for the provider credentials only.
+// Credentials a real event needs: the selected compute provider's,
+// Cloudflare's, the backend's, and on a create the storage and application
+// secrets. A delete tears down infrastructure and never converges anything, so
+// it asks for the provider credentials only.
 export function secretErrors(opts: Opts, event: string): string[] {
   const create = event === "create";
   const keys = [...new Set([
-    ...providerSecrets,
+    ...compute.secrets(spec, opts),
+    ...dnsSecrets,
     ...(create ? [...storageSecrets, ...applicationSecrets] : []),
     ...backendSecrets(opts),
   ])];
@@ -376,7 +385,7 @@ export function secretErrors(opts: Opts, event: string): string[] {
 export function tofuEnv(opts: Opts, slot: string): Record<string, string> {
   switch (slot) {
     case "provider-compute":
-      return { "vultr-api-key": "VULTR_API_KEY" };
+      return compute.tofuEnv(spec, opts);
     case "provider-dns":
       return { "cloudflare-api-token": "CLOUDFLARE_API_TOKEN" };
     case "provider-backend":

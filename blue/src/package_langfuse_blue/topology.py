@@ -4,105 +4,138 @@ addresses, the port of io.github.getcolors.langfuse.topology.
 Six machines carry far more derived identity than one: a ClickHouse replica
 that names a peer wrongly forms no quorum, an app host that points at a stale
 VPC address fails only after the migration timeout, and a firewall rule
-sourced from the wrong `/32` is a silent denial. Everything here is a pure
-function of desired state plus the compute stage's output, so the whole of it
-is reachable from the test suite and visible in the goldens. Nothing in this
-file may read the environment, the filesystem, or the network.
+sourced from the wrong `/32` is a silent denial.
+
+The node set itself — the six ids, the fallback addresses a `build` renders
+with, the aliases, and the refusal of a state that does not describe every
+machine — is the Compute Cluster Standard's
+(`workspace/standards/compute-cluster.md`) and is ONCE's `compute_cluster`
+module, called with the `spec` below and never copied. What stays here is
+Langfuse's: the roles and their fixed counts, the per-role plan key, the host
+lookups the plays and the DNS stage use, and the ports. Everything here is a
+pure function of desired state plus the compute stage's output, so the whole
+of it is reachable from the test suite and visible in the goldens. Nothing in
+this file may read the environment, the filesystem, or the network.
 """
 
 from __future__ import annotations
 
 import re
 
-from .utils import clj_str as _s
+from package_once_blue import compute as once_compute
+from package_once_blue import compute_cluster as once_cluster
+
+# ---------------------------------------------------------------- the spec
+
+# provider-compute -> what that choice implies.
+#
+# `required` are the non-secret keys the provider's template interpolates,
+# `secrets` the credentials it needs through COLORS_PAR_*, `tofu-env` the
+# subset OpenTofu reads from the process environment itself, and `network` the
+# private network every database connection crosses — created by this package
+# from `vultr-vpc-subnet`, never discovered. Keeping them together is what
+# stops a provider being validated against one set of keys and run with
+# another. The keys of this map are the advertised providers; Vultr is the
+# only one this package has a template and a golden for.
+#
+# Two keys the template reads are deliberately not required. `vultr-name` is
+# an optional override of the profile (Compute Name Standard), and
+# `vultr-ssh-keys` is meaningful by its absence (SSH Keypair Standard).
+# `vultr-http-sources` is required but deliberately NOT one of the spec's
+# `sources`: it accepts the symbolic value `cloudflare`, which the package
+# resolves itself (see `tools.http_sources`).
+compute_providers: once_cluster.ClusterRegistry = {
+    "vultr": {
+        "required": ["vultr-region", "vultr-os-id", "vultr-vpc-subnet",
+                     "vultr-plan-neon", "vultr-plan-redis", "vultr-plan-clickhouse", "vultr-plan-app",
+                     "vultr-ssh-sources", "vultr-http-sources"],
+        "secrets": ["vultr-api-key"],
+        "tofu-env": {"vultr-api-key": "VULTR_API_KEY"},
+        "network": {"mode": "created", "key": "vultr-vpc-subnet"},
+    },
+}
+
+# The provider a deployment created before this package recorded one in its
+# compute output must be running: the only one it ever offered.
+default_compute_provider = "vultr"
 
 CLICKHOUSE_NODE_COUNT = 3
 
-# The roles in play order. `app` is last because it is the consumer of the
-# other three.
-ROLES = ["neon", "redis", "clickhouse", "app"]
+# How this package describes itself to ONCE's `compute_cluster`. Four roles in
+# play order — `app` last because it is the consumer of the other three — with
+# fixed counts: one shard of three ClickHouse replicas, and one machine each
+# for the storage tier, the cache and the application. The bare `<profile>`
+# alias reaches the app host, the machine an operator most often means. The
+# fallback offsets are where each role's placeholder landed inside the subnet
+# before adoption, so the committed goldens carry the same addresses: 10, 11,
+# 12 for the singletons and 20-22 for the replicas.
+spec: once_cluster.ClusterSpec = {
+    "registry": compute_providers,
+    "default": default_compute_provider,
+    "sources": {"non_empty": ["ssh-sources"], "may_be_empty": []},
+    "roles": [
+        {"role": "neon", "count": 1, "fallback_offset": 10},
+        {"role": "redis", "count": 1, "fallback_offset": 11},
+        {"role": "clickhouse", "count": CLICKHOUSE_NODE_COUNT, "fallback_offset": 20},
+        {"role": "app", "count": 1, "fallback_offset": 12},
+    ],
+    "entry": {"role": "app", "index": 0},
+}
+
+# The roles in play order.
+ROLES = [entry["role"] for entry in spec["roles"]]
 
 
 def compute_name(opts: dict) -> str:
     """The deployment's base machine name (Compute Name Standard §1-2): the
-    profile, unless desired state overrides it with `vultr-name`."""
-    override = _s(opts.get("vultr-name"))
-    if not override.strip() or override.strip() == "REPLACE_ME":
-        return _s(opts.get("profile"))
-    return override.strip()
+    profile, unless desired state overrides it with `vultr-name`. ONCE's, so
+    every label derives from the same value."""
+    return once_compute.compute_name(opts)
 
 
 def machine_name(opts: dict, role: str, i: int | None = None) -> str:
     """The label of a machine: `<name>-<role>` for the singletons and
-    `<name>-clickhouse-<i>` for the replicas."""
-    if i is None:
-        return f"{compute_name(opts)}-{role}"
-    return f"{compute_name(opts)}-{role}-{i}"
-
-
-def clickhouse_indexes() -> list[int]:
-    return list(range(CLICKHOUSE_NODE_COUNT))
-
-
-def host_ids() -> list[dict]:
-    """Every machine this deployment claims, as `{role, index}` in play order.
-    `index` is None for the singletons and the replica ordinal for
-    ClickHouse."""
-    return [{"role": "neon", "index": None}, {"role": "redis", "index": None},
-            *({"role": "clickhouse", "index": i} for i in clickhouse_indexes()),
-            {"role": "app", "index": None}]
-
-
-def host_name(opts: dict, id: dict) -> str:
-    return machine_name(opts, id["role"], id.get("index"))
+    `<name>-clickhouse-<i>` for the replicas — the Cluster Standard's fallback
+    name, which is also what the template labels the instance."""
+    return once_cluster.fallback_node_name(spec, opts, {"role": role, "index": 0 if i is None else i})
 
 
 def plan_key(role: str) -> str:
     return f"vultr-plan-{role}"
 
 
-# ------------------------------------------------------------------ fallback
-
-
-def vpc_block(opts: dict) -> str:
-    """The network address of `vultr-vpc-subnet`, `10.50.0.0/24` -> `10.50.0.0`."""
-    value = opts["vultr-vpc-subnet"] if "vultr-vpc-subnet" in opts else "10.50.0.0/24"
-    return _s(value).split("/")[0]
-
-
-def _placeholder_vpc_ip(opts: dict, offset: int) -> str:
-    octets = vpc_block(opts).split(".")
-    return ".".join([*octets[:3], str(offset)])
-
-
-# Where each role's placeholder lands inside the subnet on a credential-free
-# build. Documentation ranges (RFC 5737 for the public side), fixed so a
-# build is byte-identical on every workstation.
-_FALLBACK_OFFSETS = {"neon": 10, "redis": 11, "app": 12, "clickhouse": 20}
-
-
-def fallback_host(opts: dict, id: dict) -> dict:
-    role, index = id["role"], id.get("index")
-    offset = _FALLBACK_OFFSETS[role] + (index or 0)
-    return {"role": role,
-            "index": index,
-            "name": host_name(opts, id),
-            "ip": f"192.0.2.{offset}",
-            "vpc-ip": _placeholder_vpc_ip(opts, offset),
-            "user": "root",
-            "sudoer": "root"}
-
-
-def fallback_hosts(opts: dict) -> list[dict]:
-    return [fallback_host(opts, id) for id in host_ids()]
-
-
 # --------------------------------------------------------------------- hosts
 
 
-def _key_of(host: dict) -> tuple:
-    index = host.get("index")
-    return (host.get("role"), int(index) if index is not None else None)
+def _singleton_role(role) -> bool:
+    """Whether `role` is declared with a count of one."""
+    return once_cluster.node_count(spec, {}, role) == 1
+
+
+def _langfuse_host(node: dict) -> dict:
+    """One of ONCE's nodes as this package's renderers read it. Two
+    respellings, both at this boundary so every rendered file stays
+    byte-identical: ONCE records `vpc_ip` with the underscore where the
+    templates, the inventory and the firewall data were written against
+    `vpc-ip`; and ONCE gives every node an index (a singleton's is 0) where
+    the inventory writes an `ordinal` only for the replicas, so a singleton's
+    index reads as None here. Nothing else is touched: the name is the label
+    the template gave the instance, never recomputed, and extension fields
+    ride through."""
+    host = {k: v for k, v in node.items() if k != "vpc_ip"}
+    host["vpc-ip"] = node.get("vpc_ip")
+    if _singleton_role(node.get("role")):
+        host["index"] = None
+    return host
+
+
+def fallback_hosts(opts: dict) -> list[dict]:
+    """What a credential-free `build` renders in place of a compute output:
+    ONCE's fallbacks — public addresses from `192.0.2.0/24`, private ones cut
+    from `vultr-vpc-subnet`, each at its role's offset — so a build is
+    byte-identical on every workstation and the committed goldens mean
+    something."""
+    return [_langfuse_host(n) for n in once_cluster.fallback_nodes(spec, opts)]
 
 
 _UNSET = object()
@@ -112,44 +145,16 @@ def hosts(opts: dict, params=_UNSET) -> list[dict]:
     """The host list the Ansible stage, the DNS stage and the acceptance
     consume.
 
-    `params` is the compute stage's `hosts` output. On a build there is none,
-    so the fallbacks stand in. On a real run a missing or short list is a
-    hard error rather than a silent partial cluster (see
-    `missing_host_error`)."""
+    `params` is the compute stage's recorded `params` map, adopted under
+    `once/cluster` on a real run. On a build there is none, so the fallbacks
+    stand in. On a real run ONCE refuses a state that does not describe every
+    declared machine with every field, and never substitutes a fallback: a
+    ClickHouse cluster config naming fewer replicas than exist forms no
+    quorum, and an app environment pointing at a missing address fails only
+    after the migration timeout."""
     if params is _UNSET:
-        params = opts.get("langfuse/hosts")
-    if not params:
-        return fallback_hosts(opts)
-    by_key = {_key_of(p): p for p in params}
-    result = []
-    for id in host_ids():
-        p = by_key.get((id["role"], id.get("index")))
-        picked = {k: p[k] for k in ("ip", "vpc-ip", "user", "sudoer") if p and k in p}
-        result.append({**fallback_host(opts, id), **picked})
-    return result
-
-
-def missing_host_error(opts: dict, params) -> str | None:
-    """The error for a compute output that does not cover every machine, or
-    that omits an address. Returned rather than raised so the workflow reports
-    it the way it reports every other failure."""
-    if not params:
-        return None
-    by_key = {_key_of(p): p for p in params}
-
-    def covered(id: dict) -> bool:
-        p = by_key.get((id["role"], id.get("index")))
-        return bool(p) and bool(_s(p.get("ip")).strip()) and bool(_s(p.get("vpc-ip")).strip())
-
-    missing = [id for id in host_ids() if not covered(id)]
-    if not missing:
-        return None
-    return ("the compute stage did not report an address for "
-            + ", ".join(host_name(opts, id) for id in missing)
-            + ". Refusing to render a partial deployment: a ClickHouse cluster "
-            "config naming fewer replicas than exist forms no quorum, and an "
-            "app environment pointing at a missing address fails only after "
-            "the migration timeout.")
+        params = opts.get("once/cluster")
+    return [_langfuse_host(n) for n in once_cluster.nodes(spec, opts, params)]
 
 
 def host_of(hosts_: list[dict], role: str, i: int | None = None) -> dict | None:

@@ -9,12 +9,14 @@
 // Unlike the keypair, this play is the package's own copy rather than ONCE's
 // (standard §7). The file is shared with every other host the operator reaches,
 // so an unrelated change upstream must not be able to rewrite it at pin-bump
-// time.
+// time. The alias list, though, is the Compute Cluster Standard's (§6) and
+// comes from ONCE.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Opts } from "red/workflow";
+import { computeCluster } from "package-once-red";
 import * as topology from "./topology.ts";
 
 // The profile, unchanged. Standard §2: the profile already keys remote state,
@@ -31,17 +33,24 @@ export function identityFile(opts: Opts): string {
   return `~/.ssh/${hostAlias(opts)}`;
 }
 
-// The alias for one machine: its label, `<profile>-<role>[-<i>]`.
-export function machineAlias(_opts: Opts, host: topology.Host): string {
-  return host.name;
-}
-
-// Every alias this deployment owns: the bare profile, and one per machine.
+// Every alias this deployment owns: the bare profile, and one per machine —
+// `<profile>-<role>` for the singletons, `<profile>-clickhouse-<i>` for the
+// replicas. ONCE derives the list from the spec (Compute Cluster Standard §6).
 // Six machines are operable only if each can be reached by name; the bare
 // profile keeps `ssh <profile>` meaning what it means in every other
 // deployment.
 export function aliases(opts: Opts): string[] {
-  return [hostAlias(opts), ...topology.hosts(opts).map((h) => machineAlias(opts, h))];
+  return computeCluster.aliases(topology.spec, opts);
+}
+
+// The alias for one machine: its entry in ONCE's list, paired with the host by
+// id. Derived from the profile, not from the machine's label, so an operator
+// who set `vultr-name` still reaches every machine as `<profile>-<role>[-<i>]`.
+export function machineAlias(opts: Opts, host: topology.Host): string {
+  const [, ...perNode] = aliases(opts);
+  const ids = computeCluster.nodeIds(topology.spec, opts);
+  const position = ids.findIndex((id) => id.role === host.role && id.index === (host.index ?? 0));
+  return perNode[position] ?? "";
 }
 
 export function configPath(): string {

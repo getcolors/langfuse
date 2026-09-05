@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { Opts } from "red/workflow";
 import * as tools from "../src/tools.ts";
 import * as topology from "../src/topology.ts";
+import { params } from "./support.ts";
 
-const opts = { profile: "langfuse-test", "vultr-vpc-subnet": "10.50.0.0/24",
+const opts = { profile: "langfuse-test", "provider-compute": "vultr", "vultr-vpc-subnet": "10.50.0.0/24",
   "langfuse-host": "langfuse.example.com", "cloudflare-proxied": true };
+
+const applied = { ...opts, "once/cluster": params };
 
 describe("tools", () => {
   test("the neon bundle renders from the dependency, not a local copy", () => {
@@ -51,12 +55,44 @@ describe("tools", () => {
     expect(groups.app.hosts["langfuse-test-app"].ordinal).toBeUndefined();
   });
 
-  test("normalize params speaks kebab-case", () => {
-    const p = tools.normalizeParams({ ssh_key_id: "k",
-      hosts: [{ role: "clickhouse", index: 1.0, ip: "1.1.1.1", vpc_ip: "10.0.0.1" }] })!;
-    expect(p["ssh-key-id"]).toBe("k");
-    expect(p.hosts[0]!.index).toBe(1);
-    expect(p.hosts[0]!["vpc-ip"]).toBe("10.0.0.1");
+  test("the adopted cluster reaches the renderers respelled", () => {
+    // ONCE records `vpc_ip` and `ssh_key_id` with underscores — the latter is
+    // the SSH Keypair Standard's contract with ONCE's create preflight and
+    // must stay verbatim on the params map. The renderers read `vpc-ip`, so
+    // the host wrapper respells that one key, and the inventory gets exactly
+    // the bytes it got before adoption: an ordinal for the replicas alone.
+    const hs = tools.hosts(applied);
+    const groups = JSON.parse(tools.inventory(applied, hs)).all.children;
+    expect(applied["once/cluster"].ssh_key_id).toBe("7692e92a");
+    expect(hs[0]!["vpc-ip"]).toBe("10.50.0.2");
+    expect(hs.some((h) => "vpc_ip" in h)).toBe(false);
+    expect(groups.app.hosts["langfuse-test-app"].vpc_ip).toBe("10.50.0.7");
+    expect(groups.app.hosts["langfuse-test-app"].ordinal).toBeUndefined();
+    expect(groups.clickhouse.hosts["langfuse-test-clickhouse-2"].ordinal).toBe(2);
+  });
+
+  test("the compute stage refuses anything but the whole cluster", () => {
+    // The real create's infrastructure step hands its tofu outputs here. No
+    // `params` output at all, or a machine set that is partial or incomplete,
+    // is exit 1 with ONCE's message rather than a ClickHouse cluster config
+    // against 192.0.2.20; the whole cluster lands under `once/cluster`.
+    const result = (p: unknown): Opts => ({ "red/exit": 0, "tofu/outputs": p ? { params: p } : {} });
+    const none = tools.resolvedCluster(opts, result(undefined));
+    expect(none["red/exit"]).toBe(1);
+    expect(none["red/err"])
+      .toBe("compute produced no params output; refusing to converge against the documentation addresses");
+    // A partial cluster: two replicas form no quorum.
+    const partial = tools.resolvedCluster(opts, result({ ...params, nodes: params.nodes!.filter((n) => !(n.role === "clickhouse" && n.index === 2)) }));
+    expect(partial["red/exit"]).toBe(1);
+    expect(partial["red/err"]).toBe("the compute stage did not report nodes this package declares: clickhouse-2");
+    const incomplete = tools.resolvedCluster(opts, result({
+      ...params, nodes: [...params.nodes!.slice(0, 5), { ...params.nodes![5]!, vpc_ip: "" }],
+    }));
+    expect(incomplete["red/exit"]).toBe(1);
+    expect(String(incomplete["red/err"])).toContain("did not report a complete node (ip, vpc_ip, name, user, sudoer) for app-0");
+    const whole = tools.resolvedCluster(opts, result(params));
+    expect(whole["red/exit"]).toBe(0);
+    expect(whole["once/cluster"]).toEqual(params);
   });
 
   test("the ssh config block carries the profile first", () => {
@@ -64,6 +100,23 @@ describe("tools", () => {
     expect(hs[0]!.name).toBe("langfuse-test");
     expect(hs[0]!.ip).toBe(topology.hostOf(topology.hosts(opts), "app")!.ip);
     expect(hs.length).toBe(7);
+    expect(hs.map((h) => h.name)).toEqual([
+      "langfuse-test", "langfuse-test-neon", "langfuse-test-redis",
+      "langfuse-test-clickhouse-0", "langfuse-test-clickhouse-1", "langfuse-test-clickhouse-2",
+      "langfuse-test-app"]);
+    expect(hs.map((h) => h.ip)).toEqual(
+      ["192.0.2.12", "192.0.2.10", "192.0.2.11", "192.0.2.20", "192.0.2.21", "192.0.2.22", "192.0.2.12"]);
+    // On a real run the addresses are the recorded ones.
+    expect(tools.sshConfigHosts(applied, tools.hosts(applied)).map((h) => h.ip)).toEqual(
+      ["1.1.1.6", "1.1.1.1", "1.1.1.2", "1.1.1.3", "1.1.1.4", "1.1.1.5", "1.1.1.6"]);
+  });
+
+  test("a delete with no compute in state stops instead of converging", async () => {
+    // A readable state without compute adopted nothing: there is nothing to
+    // stop, and the cleanup play would only fail against the placeholder
+    // addresses.
+    const result = await tools.ansibleStep({ ...opts, "red/event": "delete" });
+    expect(result["red/exit"]).toBe(0);
   });
 
   test("http sources resolve explicit lists verbatim", async () => {

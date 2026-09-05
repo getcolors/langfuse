@@ -162,8 +162,32 @@
 (deftest the-application-role-must-not-be-cloud-admin
   (is (has? {:neon-role "cloud_admin"} "must not be cloud_admin")))
 
-(deftest the-vpc-subnet-must-be-a-cidr
-  (is (has? {:vultr-vpc-subnet "10.50.0.0"} "IPv4 CIDR")))
+(deftest the-compute-checks-are-the-cluster-standards
+  ;; Selection, the SSH source list, the created network's CIDR and the
+  ;; provider rules are ONCE's over the spec, in ONCE's words. The package's
+  ;; own rules — three replicas, the cloudflare/proxied coupling — still apply
+  ;; beside them, and `vultr-http-sources` stays the package's: it is not one
+  ;; of the spec's source lists because it accepts the symbolic `cloudflare`.
+  (is (= [":provider-compute must be one of vultr"]
+         (errs {:provider-compute "digitalocean"})))
+  (is (= [":vultr-ssh-sources must list at least one CIDR"]
+         (errs {:vultr-ssh-sources []})))
+  (is (= [":vultr-ssh-sources entry \"1.2.3.4\" is not an IPv4 or IPv6 CIDR"]
+         (errs {:vultr-ssh-sources ["1.2.3.4"]})))
+  (testing "the VPC must be a network, host bits zero"
+    (is (= [":vultr-vpc-subnet must be a canonical IPv4 network such as 10.40.0.0/24"]
+           (errs {:vultr-vpc-subnet "10.50.0.0"})))
+    (is (= [":vultr-vpc-subnet must be a canonical IPv4 network such as 10.40.0.0/24"]
+           (errs {:vultr-vpc-subnet "10.50.0.1/24"}))))
+  (testing "the six fallback addresses must fit the subnet"
+    (is (= [":vultr-vpc-subnet has no usable host address for clickhouse-0, clickhouse-1, clickhouse-2"]
+           (errs {:vultr-vpc-subnet "10.50.0.0/28"}))))
+  (testing "the compute keys are required through the registry, once each"
+    (is (= [":vultr-plan-app is required"] (errs {:vultr-plan-app nil}))))
+  (is (= [":vultr-os-id must be Vultr's numeric operating-system id"]
+         (errs {:vultr-os-id "x"})))
+  (testing "an explicit http source list is not held to ONCE's grammar here"
+    (is (empty? (errs {:vultr-http-sources ["1.2.3.0/24"] :cloudflare-proxied false})))))
 
 (deftest profile-may-not-be-overlaid-from-the-environment
   (is (seq (v/env-errors {v/profile-par "somewhere-else"})))

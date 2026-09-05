@@ -6,6 +6,7 @@ import * as tofu from "red/tofu";
 import { runtime, type ExecResult } from "red/runtime";
 import type { Opts } from "red/workflow";
 import { failed } from "red/workflow";
+import { compute, computeCluster } from "package-once-red";
 import { neonResource } from "./neon.ts";
 import * as sshConfig from "./ssh-config.ts";
 import * as topology from "./topology.ts";
@@ -71,11 +72,9 @@ function spec(source: Template, target: string, data: Opts): Spec {
 
 const rawSpec = (target: string, content: string): Spec => contentSpec(target, content);
 
-export function cidrs(opts: Opts, key: string): string[] {
-  const value = opts[key];
-  const parts = Array.isArray(value) ? value : validate.s(value).split(/[,\s]+/);
-  return parts.map((part) => String(part).trim()).filter((part) => part.length > 0);
-}
+// A source list as desired state or an overlay string carries it. ONCE's, so
+// the validator and the templates can never disagree about what an entry is.
+export const cidrs = compute.cidrs;
 
 export function credentialEnv(opts: Opts, ...slots: string[]): Record<string, string> | undefined {
   const mapping: Record<string, string> = Object.assign(
@@ -122,46 +121,11 @@ function sorted<T>(value: Record<string, T>): Record<string, T> {
 
 // ------------------------------------------------------------- compute output
 
-// `vpc_ip` -> `vpc-ip`, recursively. Tofu outputs snake_case; the rest of this
-// package speaks kebab-case keys.
-function hyphenateKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(hyphenateKeys);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-      .map(([key, nested]) => [key.replaceAll("_", "-"), hyphenateKeys(nested)]));
-  }
-  return value;
-}
-
-export interface Params {
-  "ssh-key-id"?: unknown;
-  hosts: topology.HostParam[];
-  [key: string]: unknown;
-}
-
-// The compute stage's `params` output in this package's vocabulary:
-// `{ssh-key-id, hosts: [{role, index, name, ip, vpc-ip, user, sudoer}]}`.
-// `index` arrives as a number or null; a JSON parser may hand back a double.
-export function normalizeParams(params: unknown): Params | undefined {
-  if (params === null || params === undefined) return undefined;
-  const p = hyphenateKeys(params) as Record<string, unknown>;
-  const hosts = Array.isArray(p.hosts) ? (p.hosts as Record<string, unknown>[]) : [];
-  return {
-    ...p,
-    hosts: hosts.map((h) => ({
-      ...h,
-      index: typeof h.index === "number" ? Math.trunc(h.index) : null,
-    })),
-  };
-}
-
-export function outputParams(result: Opts): Params | undefined {
-  return normalizeParams((result["tofu/outputs"] as Record<string, unknown> | undefined)?.params);
-}
-
-// The host list for every stage after compute (see topology.hosts).
+// The host list for every stage after compute: the recorded cluster under
+// `once/cluster` on a real run, ONCE's fallbacks on a build (see
+// `topology.hosts`).
 export function hosts(opts: Opts): topology.Host[] {
-  return topology.hosts(opts, opts["langfuse/hosts"] as topology.HostParam[] | undefined);
+  return topology.hosts(opts);
 }
 
 // ---------------------------------------------------------------- compute
@@ -255,6 +219,16 @@ export async function infrastructureData(opts: Opts): Promise<Opts> {
   };
 }
 
+// The applied compute stage's `params`, adopted under `once/cluster` for the
+// stages that follow — or ONCE's refusal: no `params` output at all, or a
+// machine set that is partial, undeclared, duplicated or incomplete, exits 1
+// rather than rendering a ClickHouse cluster config or an app environment
+// against the documentation addresses.
+export function resolvedCluster(opts: Opts, result: Opts): Opts {
+  return computeCluster.resolvedCluster(topology.spec, opts, result, {},
+    computeCluster.outputParams(result));
+}
+
 export async function infrastructureStep(opts: Opts): Promise<Opts> {
   const dir = toolDir(opts, infrastructureTool);
   const data = await infrastructureData(opts);
@@ -273,10 +247,7 @@ export async function infrastructureStep(opts: Opts): Promise<Opts> {
   if (failed(result)) return result;
   if (opts["red/event"] === "build") return result;
   if (opts["red/event"] === "delete") return result;
-  const params = outputParams(result);
-  const error = topology.missingHostError(opts, params?.hosts);
-  if (error) return { ...result, "red/exit": 1, "red/err": error };
-  return { ...result, "langfuse/hosts": params?.hosts, "langfuse/ssh-key-id": params?.["ssh-key-id"] };
+  return resolvedCluster(opts, result);
 }
 
 // ------------------------------------------------------------------- dns
@@ -333,19 +304,11 @@ export function ansibleLocalSpecs(opts: Opts): Spec[] {
   ];
 }
 
-export interface SshConfigHost {
-  name: string;
-  ip: string | undefined;
-}
-
 // The stanzas the managed block carries: the bare profile reaching the app
-// host, then one per machine.
-export function sshConfigHosts(opts: Opts, list: topology.Host[]): SshConfigHost[] {
-  const app = topology.hostOf(list, "app");
-  return [
-    { name: sshConfig.hostAlias(opts), ip: app?.ip },
-    ...list.map((h) => ({ name: sshConfig.machineAlias(opts, h), ip: h.ip })),
-  ];
+// host (the spec's entry), then one per machine. ONCE's (Compute Cluster
+// Standard §6).
+export function sshConfigHosts(opts: Opts, list: topology.Host[]): computeCluster.SshConfigHost[] {
+  return computeCluster.sshConfigHosts(topology.spec, opts, list as unknown as computeCluster.Node[]);
 }
 
 // Write or remove the `~/.ssh/config` block. The same playbook serves both
@@ -513,10 +476,11 @@ export function ansibleSpecs(opts: Opts): Spec[] {
 
 export async function ansibleStep(opts: Opts): Promise<Opts> {
   const dir = toolDir(opts, ansibleTool);
-  const known = opts["langfuse/hosts"] as unknown[] | undefined;
-  if (opts["red/event"] === "delete" && (!known || known.length === 0)) {
-    // No compute in state: there is no host to stop, and the cleanup play
-    // would only fail against the placeholder addresses.
+  if (opts["red/event"] === "delete" && opts["once/cluster"] == null) {
+    // A readable state without compute: there is no host to stop, and the
+    // cleanup play would only fail against the placeholder addresses. (An
+    // unreadable state, or a partial one, never reaches here — the delete
+    // failed closed at adoption.)
     return { ...opts, "red/exit": 0 };
   }
   return ansible.ansibleWithSpec(opts, {

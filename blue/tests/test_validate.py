@@ -181,8 +181,30 @@ def test_the_application_role_must_not_be_cloud_admin():
     assert has({"neon-role": "cloud_admin"}, "must not be cloud_admin")
 
 
-def test_the_vpc_subnet_must_be_a_cidr():
-    assert has({"vultr-vpc-subnet": "10.50.0.0"}, "IPv4 CIDR")
+def test_the_compute_checks_are_the_cluster_standards():
+    # Selection, the SSH source list, the created network's CIDR and the
+    # provider rules are ONCE's over the spec, in ONCE's words. The package's
+    # own rules — three replicas, the cloudflare/proxied coupling — still
+    # apply beside them, and `vultr-http-sources` stays the package's: it is
+    # not one of the spec's source lists because it accepts the symbolic
+    # `cloudflare`.
+    assert errs({"provider-compute": "digitalocean"}) == [":provider-compute must be one of vultr"]
+    assert errs({"vultr-ssh-sources": []}) == [":vultr-ssh-sources must list at least one CIDR"]
+    assert errs({"vultr-ssh-sources": ["1.2.3.4"]}) == [
+        ':vultr-ssh-sources entry "1.2.3.4" is not an IPv4 or IPv6 CIDR']
+    # The VPC must be a network, host bits zero.
+    assert errs({"vultr-vpc-subnet": "10.50.0.0"}) == [
+        ":vultr-vpc-subnet must be a canonical IPv4 network such as 10.40.0.0/24"]
+    assert errs({"vultr-vpc-subnet": "10.50.0.1/24"}) == [
+        ":vultr-vpc-subnet must be a canonical IPv4 network such as 10.40.0.0/24"]
+    # The six fallback addresses must fit the subnet.
+    assert errs({"vultr-vpc-subnet": "10.50.0.0/28"}) == [
+        ":vultr-vpc-subnet has no usable host address for clickhouse-0, clickhouse-1, clickhouse-2"]
+    # The compute keys are required through the registry, once each.
+    assert errs({"vultr-plan-app": None}) == [":vultr-plan-app is required"]
+    assert errs({"vultr-os-id": "x"}) == [":vultr-os-id must be Vultr's numeric operating-system id"]
+    # An explicit http source list is not held to ONCE's grammar here.
+    assert errs({"vultr-http-sources": ["1.2.3.0/24"], "cloudflare-proxied": False}) == []
 
 
 def test_profile_may_not_be_overlaid_from_the_environment():

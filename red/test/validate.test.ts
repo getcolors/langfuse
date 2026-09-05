@@ -4,59 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { parName } from "red/cli";
 import type { Opts } from "red/workflow";
 import * as v from "../src/validate.ts";
-
-// A minimal valid desired state, kept complete on purpose: `stateErrors`
-// reports every problem at once, so a fixture missing keys would make every
-// test read as a pass-by-accident.
-const base: Opts = {
-  profile: "langfuse-test", workdir: ".colors",
-  "provider-compute": "vultr", "provider-dns": "cloudflare", "provider-backend": "r2",
-  "compute-prevent-destroy": true,
-  "langfuse-image": "docker.langfuse.com/langfuse/langfuse:4.27.0@sha256:c9e2cab8469a5d7353e86a3252b02c52ac94ef31288ce2639ee01aabf5e4222b",
-  "langfuse-worker-image": "docker.langfuse.com/langfuse/langfuse-worker:4.27.0@sha256:091a85c3c54bf5fff7cc0073a7f35a52861cc0e30d33dd05569fe3ed66b15d8d",
-  "langfuse-host": "langfuse.example.com",
-  "langfuse-init-org-id": "org", "langfuse-init-org-name": "Org",
-  "langfuse-init-project-id": "project", "langfuse-init-project-name": "Project",
-  "langfuse-init-user-email": "operator@example.com", "langfuse-init-user-name": "Operator",
-  "langfuse-s3-bucket": "langfuse-storage", "langfuse-s3-prefix": "langfuse-test/",
-  "langfuse-smoke-traces": 200, "langfuse-smoke-timeout-seconds": 120,
-  "caddy-image": "docker.io/library/caddy:2.11.4@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d",
-  "redis-image": "docker.io/library/redis:7.2.16@sha256:74566c6910d13ae61e7ce73ebd3127438a1fe805b309b097c323142719ec8a5b",
-  "redis-port": 6379,
-  "clickhouse-version": "26.3.29.7", "clickhouse-cluster-name": "default", "clickhouse-nodes": 3,
-  "clickhouse-http-port": 8123, "clickhouse-native-port": 9000, "clickhouse-interserver-port": 9009,
-  "clickhouse-keeper-port": 9181, "clickhouse-raft-port": 9234,
-  "neon-image": "ghcr.io/neondatabase/neon:release-9129@sha256:166022a72bf9983eba96d061d794f4740edbd4c3301e66202c1180acce9a323c",
-  "neon-compute-image": "ghcr.io/neondatabase/compute-node-v17:release-compute-9073@sha256:ed6a613231d7026b4df8b00563444b9f33745370a3b3f0a2183e723f460ba974",
-  "neon-pg-version": 17,
-  "neon-tenant-id": "7b3c1e94a05d42f8b6c9e2417d580a3f", "neon-timeline-id": "4f8a2d61c93b47e0a5d8f1620b7c94e3",
-  "neon-database": "langfuse", "neon-role": "langfuse",
-  "neon-r2-bucket": "langfuse-storage", "neon-r2-endpoint": "https://example.r2.cloudflarestorage.com",
-  "neon-r2-region": "auto", "neon-r2-prefix": "langfuse-test/neon",
-  "langfuse-backup-r2-bucket": "langfuse-backup", "langfuse-backup-r2-endpoint": "https://example.r2.cloudflarestorage.com",
-  "langfuse-backup-r2-region": "auto",
-  "langfuse-postgres-backup-oncalendar": "*-*-* 00/6:00:00", "langfuse-clickhouse-backup-oncalendar": "*-*-* 02:30:00",
-  "langfuse-media-backup-oncalendar": "*-*-* 03:30:00", "langfuse-backup-retention-days": 7,
-  "langfuse-postgres-backup-max-age-hours": 8, "langfuse-clickhouse-backup-max-age-hours": 30,
-  "langfuse-media-backup-max-age-hours": 30,
-  "cloudflare-zone": "example.com", "cloudflare-record-name": "langfuse", "cloudflare-proxied": true,
-  "vultr-region": "ams", "vultr-os-id": 2284, "vultr-vpc-subnet": "10.50.0.0/24",
-  "vultr-plan-neon": "vc2-4c-8gb", "vultr-plan-redis": "vc2-1c-2gb",
-  "vultr-plan-clickhouse": "vc2-4c-8gb", "vultr-plan-app": "vc2-4c-8gb",
-  "vultr-ssh-sources": ["0.0.0.0/0"], "vultr-http-sources": "cloudflare",
-  "r2-bucket": "tofu-state-example", "r2-endpoint": "https://example.r2.cloudflarestorage.com",
-};
-
-const creds: Opts = {
-  "vultr-api-key": "v", "cloudflare-api-token": "c",
-  "r2-access-key-id": "state", "r2-secret-access-key": "state-secret",
-  "neon-r2-access-key-id": "store", "neon-r2-secret-access-key": "store-secret",
-  "langfuse-storage-r2-access-key-id": "store", "langfuse-storage-r2-secret-access-key": "store-secret",
-  "langfuse-backup-r2-access-key-id": "backup", "langfuse-backup-r2-secret-access-key": "backup-secret",
-  "langfuse-encryption-key": "a".repeat(64),
-  "langfuse-salt": "s".repeat(32),
-  "langfuse-init-user-password": "twelve-chars!",
-};
+import { base, creds } from "./support.ts";
 
 const errs = (m: Opts = {}) => v.stateErrors({ ...base, ...m });
 const has = (m: Opts, needle: string) => errs(m).some((e) => new RegExp(needle).test(e));
@@ -185,8 +133,30 @@ describe("validate", () => {
     expect(has({ "neon-role": "cloud_admin" }, "must not be cloud_admin")).toBe(true);
   });
 
-  test("the vpc subnet must be a cidr", () => {
-    expect(has({ "vultr-vpc-subnet": "10.50.0.0" }, "IPv4 CIDR")).toBe(true);
+  test("the compute checks are the cluster standard's", () => {
+    // Selection, the SSH source list, the created network's CIDR and the
+    // provider rules are ONCE's over the spec, in ONCE's words. The package's
+    // own rules — three replicas, the cloudflare/proxied coupling — still
+    // apply beside them, and `vultr-http-sources` stays the package's: it is
+    // not one of the spec's source lists because it accepts the symbolic
+    // `cloudflare`.
+    expect(errs({ "provider-compute": "digitalocean" })).toEqual([":provider-compute must be one of vultr"]);
+    expect(errs({ "vultr-ssh-sources": [] })).toEqual([":vultr-ssh-sources must list at least one CIDR"]);
+    expect(errs({ "vultr-ssh-sources": ["1.2.3.4"] }))
+      .toEqual([':vultr-ssh-sources entry "1.2.3.4" is not an IPv4 or IPv6 CIDR']);
+    // The VPC must be a network, host bits zero.
+    expect(errs({ "vultr-vpc-subnet": "10.50.0.0" }))
+      .toEqual([":vultr-vpc-subnet must be a canonical IPv4 network such as 10.40.0.0/24"]);
+    expect(errs({ "vultr-vpc-subnet": "10.50.0.1/24" }))
+      .toEqual([":vultr-vpc-subnet must be a canonical IPv4 network such as 10.40.0.0/24"]);
+    // The six fallback addresses must fit the subnet.
+    expect(errs({ "vultr-vpc-subnet": "10.50.0.0/28" }))
+      .toEqual([":vultr-vpc-subnet has no usable host address for clickhouse-0, clickhouse-1, clickhouse-2"]);
+    // The compute keys are required through the registry, once each.
+    expect(errs({ "vultr-plan-app": null })).toEqual([":vultr-plan-app is required"]);
+    expect(errs({ "vultr-os-id": "x" })).toEqual([":vultr-os-id must be Vultr's numeric operating-system id"]);
+    // An explicit http source list is not held to ONCE's grammar here.
+    expect(errs({ "vultr-http-sources": ["1.2.3.0/24"], "cloudflare-proxied": false })).toEqual([]);
   });
 
   test("profile may not be overlaid from the environment", () => {

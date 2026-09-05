@@ -10,10 +10,12 @@
   Unlike the keypair, this play is the package's own copy rather than ONCE's
   (standard §7). The file is shared with every other host the operator reaches,
   so an unrelated change upstream must not be able to rewrite it at pin-bump
-  time."
+  time. The alias list, though, is the Compute Cluster Standard's (§6) and
+  comes from ONCE."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [io.github.getcolors.langfuse.topology :as topology]))
+            [io.github.getcolors.langfuse.topology :as topology]
+            [io.github.getcolors.once.compute-cluster :as once-cluster]))
 
 (defn host-alias
   "The profile, unchanged. Standard §2: the profile already keys remote state,
@@ -29,19 +31,24 @@
   [opts]
   (str "~/.ssh/" (host-alias opts)))
 
-(defn machine-alias
-  "The alias for one machine: its label, `<profile>-<role>[-<i>]`."
-  [opts host]
-  (:name host))
-
 (defn aliases
-  "Every alias this deployment owns: the bare profile, and one per machine.
-  Six machines are operable only if each can be reached by name; the bare
-  profile keeps `ssh <profile>` meaning what it means in every other
+  "Every alias this deployment owns: the bare profile, and one per machine —
+  `<profile>-<role>` for the singletons, `<profile>-clickhouse-<i>` for the
+  replicas. ONCE derives the list from the spec (Compute Cluster Standard
+  §6). Six machines are operable only if each can be reached by name; the
+  bare profile keeps `ssh <profile>` meaning what it means in every other
   deployment."
   [opts]
-  (into [(host-alias opts)]
-        (map #(machine-alias opts %) (topology/hosts opts))))
+  (once-cluster/aliases topology/spec opts))
+
+(defn machine-alias
+  "The alias for one machine: its entry in ONCE's list, paired with the host
+  by id. Derived from the profile, not from the machine's label, so an
+  operator who set `vultr-name` still reaches every machine as
+  `<profile>-<role>[-<i>]`."
+  [opts host]
+  (get (zipmap (once-cluster/node-ids topology/spec opts) (rest (aliases opts)))
+       {:role (:role host) :index (or (:index host) 0)}))
 
 (defn config-path []
   (io/file (System/getProperty "user.home") ".ssh" "config"))

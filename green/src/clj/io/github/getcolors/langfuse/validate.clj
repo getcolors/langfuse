@@ -1,14 +1,34 @@
 (ns io.github.getcolors.langfuse.validate
   (:require [clojure.string :as str]
             [green.cli :as green-cli]
+            [io.github.getcolors.once.compute :as compute]
+            [io.github.getcolors.once.compute-cluster :as once-cluster]
             [io.github.getcolors.once.ssh :as once-ssh]
             [io.github.getcolors.once.validate :as once-validate]
             [io.github.getcolors.langfuse.topology :as topology]))
 
 (def profile-par (green-cli/par-name :profile))
 
+;; The registry and the spec live in `topology`, which every host derivation
+;; needs and which this namespace already depends on for the ClickHouse count;
+;; they are named here too so the lifecycle reads them from the validator, as
+;; the other delegating packages do.
+(def compute-providers
+  "The advertised compute providers and what each implies (Compute Provider
+  Standard §2, Compute Cluster Standard §2). `topology/compute-providers`."
+  topology/compute-providers)
+
+(def default-compute-provider
+  "What a legacy state without `params.provider` is. `topology/default-compute-provider`."
+  topology/default-compute-provider)
+
+(def spec
+  "How this package describes itself to ONCE's `compute-cluster`. `topology/spec`."
+  topology/spec)
+
 (def required
-  "Every key desired state must carry.
+  "Every key desired state must carry whichever provider is selected. The
+  provider-scoped keys come from `compute-providers`.
 
   Two deliberate absences carried over from `neon`: `vultr-ssh-keys` selects
   opt-out mode by being present (SSH Keypair Standard), so requiring it would
@@ -45,10 +65,6 @@
    :langfuse-media-backup-max-age-hours
    ;; public name and TLS
    :cloudflare-zone :cloudflare-record-name :cloudflare-proxied
-   ;; compute
-   :vultr-region :vultr-os-id :vultr-vpc-subnet
-   :vultr-plan-neon :vultr-plan-redis :vultr-plan-clickhouse :vultr-plan-app
-   :vultr-ssh-sources :vultr-http-sources
    :r2-bucket :r2-endpoint])
 
 (def image-keys [:langfuse-image :langfuse-worker-image :caddy-image :redis-image
@@ -62,7 +78,6 @@
 (def url-re #"^https://[^\s]+$")
 (def host-re #"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
 (def email-re #"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-(def cidr-v4-re #"^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$")
 (def clickhouse-version-re #"^(\d+)\.(\d+)\.\d+\.\d+$")
 (def version-tag-re #":([^\s:@/]+)@sha256:")
 
@@ -96,13 +111,18 @@
     (let [major (Long/parseLong major) minor (Long/parseLong minor)]
       (or (> major 25) (and (= major 25) (>= minor 12))))))
 
-(defn state-errors [opts]
+(defn state-errors
+  "Every problem with desired state at once: the missing keys (this package's
+  and the selected provider's), the package's own checks, then the Compute
+  Cluster Standard's — selection, the SSH source list, the provider rules,
+  the created network's CIDR and the topology — which are ONCE's over `spec`."
+  [opts]
   (vec
    (concat
-    (for [k required :when (missing? (get opts k))] (str k " is required"))
+    (for [k (concat required (compute/required-keys spec opts))
+          :when (missing? (get opts k))]
+      (str k " is required"))
 
-    (when-not (= "vultr" (:provider-compute opts))
-      [":provider-compute must be vultr"])
     (when-not (= "cloudflare" (:provider-dns opts))
       [":provider-dns must be cloudflare"])
     (when-not (contains? #{"local" "s3" "r2"} (:provider-backend opts))
@@ -215,9 +235,6 @@
       (str k " must be a positive integer"))
 
     ;; --- network ----------------------------------------------------------------
-    (when (and (not (missing? (:vultr-vpc-subnet opts)))
-               (not (re-matches cidr-v4-re (str (:vultr-vpc-subnet opts)))))
-      [":vultr-vpc-subnet must be an IPv4 CIDR, e.g. 10.50.0.0/24"])
     ;; Restricting the origin to Cloudflare's ranges and NOT proxying the
     ;; record are mutually exclusive, and the failure is silent until the
     ;; certificate is needed: Caddy answers the ACME HTTP-01 challenge on :80,
@@ -229,16 +246,22 @@
     (when-not (or (missing? (:r2-credential-sharing opts))
                   (contains? #{"split" "shared-accepted"} (str (:r2-credential-sharing opts))))
       [":r2-credential-sharing must be split or shared-accepted"])
-    (when-not (or (missing? (:vultr-os-id opts)) (integer? (:vultr-os-id opts)))
-      [":vultr-os-id must be Vultr's numeric operating-system id"]))))
+
+    ;; --- compute: the Compute Cluster Standard's checks are ONCE's over the
+    ;; spec — selection, the SSH source list, the Vultr os id and name rules,
+    ;; the canonical VPC CIDR, and the six fallback addresses inside it.
+    ;; `vultr-http-sources` is not among them: it accepts the symbolic
+    ;; `cloudflare`, resolved by this package, and its one rule is above.
+    (once-cluster/state-errors spec opts))))
 
 (defn backend-secrets [opts]
   (:secrets (get-in once-validate/providers
                     [:provider-backend (:provider-backend opts)])))
 
-(def provider-secrets
-  "What talking to the providers needs, on any real event."
-  [:vultr-api-key :cloudflare-api-token])
+(def dns-secrets
+  "What talking to Cloudflare needs, on any real event. The compute
+  provider's credential comes from the registry."
+  [:cloudflare-api-token])
 
 (def storage-secrets
   "The two pairs that reach hosts on a create. `neon-r2-*` is what the
@@ -259,11 +282,14 @@
   (and (not (missing? (get opts a))) (= (str (get opts a)) (str (get opts b)))))
 
 (defn secret-errors
-  "Credentials a real event needs. A delete tears down infrastructure and never
-  converges anything, so it asks for the provider credentials only."
+  "Credentials a real event needs: the selected compute provider's,
+  Cloudflare's, the backend's, and on a create the storage and application
+  secrets. A delete tears down infrastructure and never converges anything,
+  so it asks for the provider credentials only."
   [opts event]
   (let [create? (= :create event)
-        ks (concat provider-secrets
+        ks (concat (compute/secrets spec opts)
+                   dns-secrets
                    (when create? (concat storage-secrets application-secrets))
                    (backend-secrets opts))]
     (concat
@@ -300,7 +326,7 @@
 
 (defn tofu-env [opts slot]
   (case slot
-    :provider-compute {:vultr-api-key "VULTR_API_KEY"}
+    :provider-compute (compute/tofu-env spec opts)
     :provider-dns     {:cloudflare-api-token "CLOUDFLARE_API_TOKEN"}
     :provider-backend (:tofu-env (get-in once-validate/providers
                                          [:provider-backend (:provider-backend opts)]) {})

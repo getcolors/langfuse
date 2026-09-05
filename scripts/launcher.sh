@@ -95,6 +95,18 @@ grep -q "rev = \"$neon_sha\"" "$root/blue/pyproject.toml" || fail 'blue/pyprojec
 grep -q "getcolors/neon#$neon_sha" "$red_launcher" || fail 'red payload PINS neon pin differs from green'
 ok 'the neon pin agrees in green, red, blue, and the red payload'
 
+# The ONCE pin likewise: the red payload's PINS and the blue payload's PEP 723
+# block install ONCE themselves, so a manifest bump the payloads did not follow
+# installs a package whose `compute-cluster` import fails at first use in the
+# deployment, not here.
+once_sha=$(awk '/once\.git/ {found=1} found && match($0, /:git\/sha "[0-9a-f]{40}"/) {print substr($0, RSTART+10, 40); exit}' "$root/green/deps.edn")
+[ -n "$once_sha" ] || fail 'green/deps.edn carries no ONCE pin'
+grep -q "getcolors/once#$once_sha" "$root/red/package.json" || fail 'red/package.json ONCE pin differs from green'
+grep -q "once.git\", subdirectory = \"blue\", rev = \"$once_sha\"" "$root/blue/pyproject.toml" || fail 'blue/pyproject.toml ONCE pin differs from green'
+grep -q "getcolors/once#$once_sha" "$red_launcher" || fail 'red payload PINS ONCE pin differs from green'
+grep -q "once.git\", rev = \"$once_sha\"" "$blue_launcher" || fail 'blue payload PEP 723 ONCE pin differs from green'
+ok 'the ONCE pin agrees in green, red, blue, and the red and blue payloads'
+
 [ -L "$root/red/red" ] && [ "$(readlink "$root/red/red")" = ../skills/package-langfuse-red/red ] || fail 'red/red is not the payload symlink'
 [ -L "$root/blue/blue" ] && [ "$(readlink "$root/blue/blue")" = ../skills/package-langfuse-blue/blue ] || fail 'blue/blue is not the payload symlink'
 ok 'red and blue colour launchers are the payload symlinks'

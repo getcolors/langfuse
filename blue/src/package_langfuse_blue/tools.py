@@ -18,6 +18,8 @@ from blue.ansible import ansible_with_spec
 from blue.cli import stage_dir
 from blue.runtime import runtime
 from blue.scaffold import PRESERVE_JINJA_DELIMITERS, content_spec
+from package_once_blue import compute as once_compute
+from package_once_blue import compute_cluster as once_cluster
 
 from . import ssh_config, topology, validate
 from .utils import clj_str as _s
@@ -59,14 +61,9 @@ def raw_spec(target: str, content: str) -> dict:
     return content_spec(target, content)
 
 
-def cidrs(opts: dict, key: str) -> list[str]:
-    value = opts.get(key)
-    if isinstance(value, (list, tuple)):
-        xs = list(value)
-    else:
-        import re
-        xs = re.split(r"[,\s]+", _s(value))
-    return [s for s in (_s(x).strip() for x in xs) if s]
+# A source list as desired state or an overlay string carries it. ONCE's, so
+# the validator and the templates can never disagree about what an entry is.
+cidrs = once_compute.cidrs
 
 
 def credential_env(opts: dict, *slots: str) -> dict[str, str] | None:
@@ -147,41 +144,11 @@ def _pretty(value, indent: int = 0) -> str:
 # ------------------------------------------------------------- compute output
 
 
-def _hyphenate_keys(value):
-    """`vpc_ip` -> `vpc-ip`, recursively. Tofu outputs snake_case; the rest of
-    this package speaks kebab-case."""
-    if isinstance(value, dict):
-        return {str(k).replace("_", "-"): _hyphenate_keys(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_hyphenate_keys(v) for v in value]
-    return value
-
-
-def _index(value):
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return int(value)
-
-
-def normalize_params(params: dict | None) -> dict | None:
-    """The compute stage's `params` output in this package's vocabulary:
-    `{ssh-key-id, hosts: [{role, index, name, ip, vpc-ip, user, sudoer}]}`.
-    `index` arrives as a number or None; a JSON decoder may hand back a
-    float."""
-    if params is None:
-        return None
-    p = _hyphenate_keys(params)
-    hosts_ = [{**h, "index": _index(h.get("index"))} for h in (p.get("hosts") or [])]
-    return {**p, "hosts": hosts_}
-
-
-def output_params(result: dict) -> dict | None:
-    return normalize_params((result.get("tofu/outputs") or {}).get("params"))
-
-
 def hosts(opts: dict) -> list[dict]:
-    """The host list for every stage after compute (see topology.hosts)."""
-    return topology.hosts(opts, opts.get("langfuse/hosts"))
+    """The host list for every stage after compute: the recorded cluster
+    under `once/cluster` on a real run, ONCE's fallbacks on a build (see
+    `topology.hosts`)."""
+    return topology.hosts(opts)
 
 
 # ---------------------------------------------------------------- compute
@@ -266,6 +233,16 @@ def infrastructure_data(opts: dict) -> dict:
                 tofu.hcl_list([str(p) for p in topology.clickhouse_internal_ports(opts)])}
 
 
+def resolved_cluster(opts: dict, result: dict) -> dict:
+    """The applied compute stage's `params`, adopted under `once/cluster` for
+    the stages that follow — or ONCE's refusal: no `params` output at all, or
+    a machine set that is partial, undeclared, duplicated or incomplete,
+    exits 1 rather than rendering a ClickHouse cluster config or an app
+    environment against the documentation addresses."""
+    return once_cluster.resolved_cluster(topology.spec, opts, result, {},
+                                         once_cluster.output_params(result))
+
+
 async def infrastructure_step(opts: dict) -> dict:
     dir = tool_dir(opts, infrastructure_tool)
     data = infrastructure_data(opts)
@@ -284,12 +261,7 @@ async def infrastructure_step(opts: dict) -> dict:
         return result
     if opts.get("blue/event") in ("build", "delete"):
         return result
-    params = output_params(result) or {}
-    error = topology.missing_host_error(opts, params.get("hosts"))
-    if error:
-        return {**result, "blue/exit": 1, "blue/err": error}
-    return {**result, "langfuse/hosts": params.get("hosts"),
-            "langfuse/ssh-key-id": params.get("ssh-key-id")}
+    return resolved_cluster(opts, result)
 
 
 # ------------------------------------------------------------------- dns
@@ -348,10 +320,9 @@ def ansible_local_specs(opts: dict) -> list[dict]:
 
 def ssh_config_hosts(opts: dict, hosts_: list[dict]) -> list[dict]:
     """The stanzas the managed block carries: the bare profile reaching the
-    app host, then one per machine."""
-    app = topology.host_of(hosts_, "app") or {}
-    return [{"name": ssh_config.host_alias(opts), "ip": app.get("ip")},
-            *({"name": ssh_config.machine_alias(opts, h), "ip": h.get("ip")} for h in hosts_)]
+    app host (the spec's entry), then one per machine. ONCE's (Compute
+    Cluster Standard §6)."""
+    return once_cluster.ssh_config_hosts(topology.spec, opts, hosts_)
 
 
 async def ansible_local_step(opts: dict) -> dict:
@@ -464,9 +435,11 @@ def ansible_specs(opts: dict) -> list[dict]:
 
 async def ansible_step(opts: dict) -> dict:
     dir = tool_dir(opts, ansible_tool)
-    if opts.get("blue/event") == "delete" and not opts.get("langfuse/hosts"):
-        # No compute in state: there is no host to stop, and the cleanup play
-        # would only fail against the placeholder addresses.
+    if opts.get("blue/event") == "delete" and opts.get("once/cluster") is None:
+        # A readable state without compute: there is no host to stop, and the
+        # cleanup play would only fail against the placeholder addresses. (An
+        # unreadable state, or a partial one, never reaches here — the delete
+        # failed closed at adoption.)
         return {**opts, "blue/exit": 0}
     return await ansible_with_spec(
         opts, ansible_specs(opts),

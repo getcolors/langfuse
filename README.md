@@ -71,6 +71,12 @@ every update.
 `build` and `--dry-run` work on a fresh checkout with an empty environment.
 Exit code 2 means validation failure and lists every problem at once.
 
+The six machines follow the workspace Compute Cluster Standard: the compute
+stage records them as `params.nodes`, and a deployment created before that
+(one whose state still records `hosts`) is read as-is — its next converge
+plans an output change only (`hosts` becomes `nodes`), never a resource
+change.
+
 ## Configuration
 
 `colors.yml` is the only file you edit; every key is documented in

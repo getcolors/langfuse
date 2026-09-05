@@ -1,85 +1,128 @@
 import { readPars, parName } from "red/cli";
 import * as dryRun from "red/dry-run";
-import { preflight } from "red/lifecycle";
+import { preflight, type PreflightContext } from "red/lifecycle";
 import * as progress from "red/progress";
 import * as tofu from "red/tofu";
 import { adviceAdd, failed, workflow, type Opts, type WireDecl } from "red/workflow";
+import { compute, computeCluster } from "package-once-red";
 import * as ssh from "./ssh.ts";
 import * as sshConfig from "./ssh-config.ts";
 import * as tools from "./tools.ts";
 import * as validate from "./validate.ts";
 
 export const defaults: Opts = {
-  "provider-compute": "vultr", "provider-dns": "cloudflare",
+  "provider-compute": validate.defaultComputeProvider, "provider-dns": "cloudflare",
   "provider-backend": "local", "compute-prevent-destroy": true,
   workdir: ".colors",
 };
 
-// The compute stage's applied `params`, or undefined when no state is
-// readable. The create matrix keys on this best-effort read: an unreadable
-// state (a fresh clone, a missing backend) counts as absent.
+// The recorded `params` in the Compute Cluster Standard's shape.
 //
-// UNTOUCHED: ONCE's create matrix reads `ssh_key_id` with the underscore from
-// this map, and a renamed key reads as a key this deployment does not own —
-// the standard's never-adopt rule then refuses the deployment's own key. The
-// host list is normalized separately below.
-export async function stateOutput(opts: Opts): Promise<Record<string, unknown> | undefined> {
-  try {
-    const outputs = await tofu.outputs(
-      tools.toolDir(opts, tools.infrastructureTool),
-      tools.backendCredentialEnv(opts),
-    );
-    const params = outputs.params;
-    return params && typeof params === "object" ? params as Record<string, unknown> : undefined;
-  } catch {
-    return undefined;
-  }
+// A state written before this package adopted the standard — `langfuse-vultr`'s
+// is one — recorded its machines under `hosts`, with `index: null` on the four
+// singletons and no `provider`. ONCE reads exactly `provider`, `ssh_key_id` and
+// `nodes`, and refuses `index: null` as an id this package does not declare, so
+// the translation happens here, before ONCE sees the state: `hosts` becomes
+// `nodes`, every null index becomes 0 (a singleton is node 0 of its role; the
+// replicas already carry their ordinal), and the provider is the only one this
+// package ever offered. Roles, names and addresses are untouched, and so is
+// everything else in the map — `ssh_key_id` above all, which the SSH Keypair
+// Standard's create matrix reads verbatim. A `params` that already carries
+// `nodes` passes through. Nothing here checks cardinality: a `hosts` list that
+// does not describe every machine is ONCE's `nodeErrors` to refuse, through
+// `adoptState`.
+export function legacyParams(params: compute.Params): compute.Params {
+  if (!("hosts" in params) || "nodes" in params) return params;
+  const { hosts, ...rest } = params;
+  const nodes = (Array.isArray(hosts) ? hosts as Record<string, unknown>[] : [])
+    .map((h) => ({ ...h, index: h.index ?? 0 }));
+  return { ...rest, provider: validate.defaultComputeProvider, nodes };
 }
 
-// Events that run against existing machines (delete, rehearse, describe)
-// take their addresses from state rather than from a fresh apply.
-export async function withStateHosts(opts: Opts): Promise<Opts> {
-  const params = tools.normalizeParams(await stateOutput(opts));
-  if (!params || params.hosts.length === 0) return opts;
-  return { ...opts, "langfuse/hosts": params.hosts, "langfuse/ssh-key-id": params["ssh-key-id"] };
+// The reader ONCE's `readState` takes: the recorded `params` map with the
+// underscores kept (`ssh_key_id`, `vpc_ip`) and translated from the
+// pre-adoption `hosts` shape by `legacyParams`, or undefined when the state is
+// readable and holds no compute. An unreadable backend is whatever `red/tofu`
+// throws — the SDK's `StepError` — deliberately uncaught: `readState` turns it
+// into `{ error }`, and create treats that differently from delete, rehearse
+// and describe. The output read is injectable so a test can put the real
+// reader, translation and all, over a recorded state.
+export async function stateOutput(
+  opts: Opts,
+  read: typeof tofu.outputs = tofu.outputs,
+): Promise<compute.Params | undefined> {
+  const outputs = await read(tools.toolDir(opts, tools.infrastructureTool), tools.backendCredentialEnv(opts));
+  const params = outputs.params;
+  return params && typeof params === "object" ? legacyParams(params as compute.Params) : undefined;
+}
+
+// The events that run against the recorded cluster and adopt it from state:
+// delete, rehearse and describe. Create reads the state too, for the SSH
+// Keypair Standard's create matrix and the provider switch guard, but takes
+// its cluster from the fresh apply.
+export const stateEvents = ["delete", "rehearse", "describe"];
+
+// The one thing `startStep` reaches outside the process — the compute state —
+// injectable so tests never shell out to tofu. The default is the real reader.
+export interface StartDeps {
+  reader?: compute.StateReader;
 }
 
 export async function startStep(
   opts: Opts,
   env: Record<string, string | undefined> = process.env,
+  deps: StartDeps = {},
 ): Promise<Opts> {
+  const reader = deps.reader ?? stateOutput;
+  // The state is read once, up front, on the same defaulted and overlaid opts
+  // the validators see — the overlay is what carries the backend credentials —
+  // and only for the events that touch a provider or the recorded cluster. The
+  // validator and the after-validate share the one read.
+  const overlaid = readPars({ ...defaults, ...opts }, env);
+  const event = typeof overlaid["red/event"] === "string" ? overlaid["red/event"] as string : undefined;
+  const context: PreflightContext = { event, real: !overlaid["red/dry-run"] };
+  const readsState = compute.lifecycleEvent(context) ||
+    (context.real && event !== undefined && stateEvents.includes(event));
+  const state: compute.StateRead = readsState ? await computeCluster.readState(overlaid, reader) : {};
   return preflight(opts, {
     defaults,
     overlay: readPars,
     validators: [
       (_opts, environment) => validate.envErrors(environment),
       (current) => validate.stateErrors(current),
-      (current, _environment, { event, real }) =>
-        real && (event === "create" || event === "delete")
-          ? validate.secretErrors(current, event)
-          : [],
-      (current, _environment, { event, real }) =>
-        real && event === "delete" && current["compute-prevent-destroy"]
+      // Compute Provider Standard §4 before the credentials: a recorded
+      // provider that differs from the selected one reports the actionable
+      // error, not a missing token for the provider that was just selected.
+      (current, _environment, ctx) => (compute.lifecycleEvent(ctx)
+        ? computeCluster.providerValidator(validate.spec, current, state.params,
+            () => validate.secretErrors(current, String(ctx.event)))
+        : []),
+      (current, _environment, { event: e, real }) =>
+        real && e === "delete" && current["compute-prevent-destroy"]
           ? [`compute destruction is protected; set ${parName("compute-prevent-destroy")}=false to delete`]
           : [],
     ],
     // The machine key's create matrix and the Vultr preflight run before any
     // template is rendered: an unowned key on disk or at the provider stops
-    // the run while stopping is still free.
-    afterValidate: async (current, _environment, { event, real }) => {
-      if (real && event === "delete") {
-        return { ...(await withStateHosts(ssh.withMachineKey(current))), "red/exit": 0 };
+    // the run while stopping is still free. Delete, rehearse and describe
+    // adopt the recorded cluster under `once/cluster` instead, failing closed
+    // on a backend they cannot read and on a state that does not describe
+    // every machine.
+    afterValidate: async (current, _environment, { event: e, real }) => {
+      if (real && e === "delete") {
+        return computeCluster.adoptState(validate.spec, current, "delete", state);
       }
-      if (real && (event === "rehearse" || event === "describe")) {
-        const next = await withStateHosts(ssh.withMachineKey(current));
-        const known = next["langfuse/hosts"] as unknown[] | undefined;
-        if (!known || known.length === 0) {
-          return { ...next, "red/exit": 1, "red/err": `${event}: no compute in state; run create first` };
+      if (real && (e === "rehearse" || e === "describe")) {
+        const next = computeCluster.adoptState(validate.spec, current, e, state);
+        if (!failed(next) && next["once/cluster"] == null) {
+          // Readable, and nothing recorded: there is nothing to rehearse
+          // against or describe.
+          return { ...next, "red/exit": 1, "red/err": `${e}: no compute in state; run create first` };
         }
-        return { ...next, "red/exit": 0 };
+        return next;
       }
-      if (real && event === "create") {
-        let next = await ssh.ensureKey(current, stateOutput);
+      if (real && e === "create") {
+        let next = await ssh.ensureKey(current, async () => state.params);
         if (failed(next)) return next;
         next = await ssh.preflight(ssh.withMachineKey(next));
         if (!failed(next)) next = sshConfig.preflight(next);

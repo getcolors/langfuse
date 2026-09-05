@@ -1,7 +1,6 @@
 (ns io.github.getcolors.langfuse.tools
   (:require [cheshire.core :as json]
             [clojure.string :as str]
-            [clojure.walk :as walk]
             [green.ansible :as ansible]
             [green.cli :as green-cli]
             [green.process :as process]
@@ -10,7 +9,9 @@
             [green.workflow :as wf]
             [io.github.getcolors.langfuse.ssh-config :as ssh-config]
             [io.github.getcolors.langfuse.topology :as topology]
-            [io.github.getcolors.langfuse.validate :as validate]))
+            [io.github.getcolors.langfuse.validate :as validate]
+            [io.github.getcolors.once.compute :as compute]
+            [io.github.getcolors.once.compute-cluster :as once-cluster]))
 
 (def infrastructure-tool "langfuse-infrastructure")
 (def dns-tool "langfuse-dns")
@@ -32,9 +33,10 @@
 (defn spec [source target data] {:template source :target target :data data :opts template-opts})
 (defn raw-spec [target content] (sc/content-spec target content))
 
-(defn cidrs [opts k]
-  (let [v (get opts k) xs (if (sequential? v) v (str/split (str v) #"[,\s]+"))]
-    (->> xs (map (comp str/trim str)) (remove str/blank?) vec)))
+(def cidrs
+  "A source list as desired state or an overlay string carries it. ONCE's, so
+  the validator and the templates can never disagree about what an entry is."
+  compute/cidrs)
 
 (defn credential-env [opts & slots]
   (not-empty
@@ -45,33 +47,12 @@
 
 ;; ------------------------------------------------------------- compute output
 
-(defn- hyphenate-keys
-  "`vpc_ip` -> `:vpc-ip`, recursively. Tofu outputs snake_case; the rest of
-  this package speaks kebab-case keywords."
-  [x]
-  (walk/postwalk
-   (fn [v]
-     (if (map? v)
-       (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) v)
-       v))
-   x))
-
-(defn normalize-params
-  "The compute stage's `params` output in this package's vocabulary:
-  `{:ssh-key-id .. :hosts [{:role :index :name :ip :vpc-ip :user :sudoer}]}`.
-  `index` arrives as a number or nil; Cheshire may hand back a double."
-  [params]
-  (when params
-    (let [p (hyphenate-keys params)]
-      (update p :hosts (fn [hs] (mapv #(update % :index (fn [i] (when (number? i) (int i)))) (or hs [])))))))
-
-(defn output-params [result]
-  (normalize-params (get-in result [:tofu/outputs :params])))
-
 (defn hosts
-  "The host list for every stage after compute (see topology/hosts)."
+  "The host list for every stage after compute: the recorded cluster under
+  `:once/cluster` on a real run, ONCE's fallbacks on a build (see
+  `topology/hosts`)."
   [opts]
-  (topology/hosts opts (:langfuse/hosts opts)))
+  (topology/hosts opts))
 
 ;; ---------------------------------------------------------------- compute
 
@@ -134,6 +115,16 @@
            :app-clickhouse-ports-hcl (tofu/hcl-list (map str (topology/app-clickhouse-ports opts)))
            :clickhouse-internal-ports-hcl (tofu/hcl-list (map str (topology/clickhouse-internal-ports opts))))))
 
+(defn resolved-cluster
+  "The applied compute stage's `params`, adopted under `:once/cluster` for
+  the stages that follow — or ONCE's refusal: no `params` output at all, or
+  a machine set that is partial, undeclared, duplicated or incomplete, exits
+  1 rather than rendering a ClickHouse cluster config or an app environment
+  against the documentation addresses."
+  [opts result]
+  (once-cluster/resolved-cluster topology/spec opts result {}
+                                 (once-cluster/output-params result)))
+
 (defn infrastructure-step [opts]
   (let [dir (tool-dir opts infrastructure-tool)
         data (infrastructure-data opts)
@@ -152,12 +143,7 @@
       (wf/failed? result) result
       (= :build (:green/event opts)) result
       (= :delete (:green/event opts)) result
-      :else
-      (let [params (output-params result)]
-        (if-let [err (topology/missing-host-error opts (:hosts params))]
-          (assoc result :green/exit 1 :green/err err)
-          (assoc result :langfuse/hosts (:hosts params)
-                 :langfuse/ssh-key-id (:ssh-key-id params)))))))
+      :else (resolved-cluster opts result))))
 
 ;; ------------------------------------------------------------------- dns
 
@@ -204,11 +190,10 @@
 
 (defn ssh-config-hosts
   "The stanzas the managed block carries: the bare profile reaching the app
-  host, then one per machine."
+  host (the spec's entry), then one per machine. ONCE's (Compute Cluster
+  Standard §6)."
   [opts hosts*]
-  (let [app (topology/host-of hosts* :app)]
-    (into [{:name (ssh-config/host-alias opts) :ip (:ip app)}]
-          (map (fn [h] {:name (ssh-config/machine-alias opts h) :ip (:ip h)}) hosts*))))
+  (once-cluster/ssh-config-hosts topology/spec opts hosts*))
 
 (defn ansible-local-step
   "Write or remove the `~/.ssh/config` block. The same playbook serves both
@@ -317,9 +302,11 @@
 
 (defn ansible-step [opts]
   (let [dir (tool-dir opts ansible-tool)]
-    (if (and (= :delete (:green/event opts)) (empty? (:langfuse/hosts opts)))
-      ;; No compute in state: there is no host to stop, and the cleanup play
-      ;; would only fail against the placeholder addresses.
+    (if (and (= :delete (:green/event opts)) (nil? (:once/cluster opts)))
+      ;; A readable state without compute: there is no host to stop, and the
+      ;; cleanup play would only fail against the placeholder addresses. (An
+      ;; unreadable state, or a partial one, never reaches here — the delete
+      ;; failed closed at adoption.)
       (assoc opts :green/exit 0)
       (ansible/ansible-with-spec opts
         {:dir dir :inventory "inventory.json"

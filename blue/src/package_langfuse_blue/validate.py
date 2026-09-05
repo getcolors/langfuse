@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 
 from blue.cli import par_name
+from package_once_blue import compute as once_compute
+from package_once_blue import compute_cluster as once_cluster
 from package_once_blue import ssh as once_ssh
 from package_once_blue.validate import providers as once_providers
 
@@ -18,7 +20,16 @@ from .utils import clj_str as _s
 
 profile_par = par_name("profile")
 
-# Every key desired state must carry.
+# The registry and the spec live in `topology`, which every host derivation
+# needs and which this module already depends on for the ClickHouse count;
+# they are named here too so the lifecycle reads them from the validator, as
+# the other delegating packages do.
+compute_providers = topology.compute_providers
+default_compute_provider = topology.default_compute_provider
+spec = topology.spec
+
+# Every key desired state must carry whichever provider is selected. The
+# provider-scoped keys come from `compute_providers`.
 #
 # Two deliberate absences carried over from `neon`: `vultr-ssh-keys` selects
 # opt-out mode by being present (SSH Keypair Standard), so requiring it would
@@ -56,10 +67,6 @@ required = [
     "langfuse-media-backup-max-age-hours",
     # public name and TLS
     "cloudflare-zone", "cloudflare-record-name", "cloudflare-proxied",
-    # compute
-    "vultr-region", "vultr-os-id", "vultr-vpc-subnet",
-    "vultr-plan-neon", "vultr-plan-redis", "vultr-plan-clickhouse", "vultr-plan-app",
-    "vultr-ssh-sources", "vultr-http-sources",
     "r2-bucket", "r2-endpoint",
 ]
 
@@ -74,7 +81,6 @@ slug_re = re.compile(r"[a-z0-9][a-z0-9-]*")
 url_re = re.compile(r"https://[^\s]+")
 host_re = re.compile(r"(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}")
 email_re = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
-cidr_v4_re = re.compile(r"(\d{1,3}\.){3}\d{1,3}/\d{1,2}")
 clickhouse_version_re = re.compile(r"(\d+)\.(\d+)\.\d+\.\d+")
 version_tag_re = re.compile(r":([^\s:@/]+)@sha256:")
 
@@ -135,11 +141,16 @@ def _clickhouse_version_ok(value) -> bool | None:
 
 
 def state_errors(opts: dict) -> list[str]:
+    """Every problem with desired state at once: the missing keys (this
+    package's and the selected provider's), the package's own checks, then
+    the Compute Cluster Standard's — selection, the SSH source list, the
+    provider rules, the created network's CIDR and the topology — which are
+    ONCE's over `spec`."""
     errors: list[str] = []
-    errors += [f":{k} is required" for k in required if missing(opts.get(k))]
+    errors += [f":{k} is required"
+               for k in [*required, *once_compute.required_keys(spec, opts)]
+               if missing(opts.get(k))]
 
-    if opts.get("provider-compute") != "vultr":
-        errors.append(":provider-compute must be vultr")
     if opts.get("provider-dns") != "cloudflare":
         errors.append(":provider-dns must be cloudflare")
     if opts.get("provider-backend") not in ("local", "s3", "r2"):
@@ -249,9 +260,6 @@ def state_errors(opts: dict) -> list[str]:
             errors.append(f":{k} must be a positive integer")
 
     # --- network ----------------------------------------------------------------
-    if (not missing(opts.get("vultr-vpc-subnet"))
-            and not cidr_v4_re.fullmatch(_s(opts.get("vultr-vpc-subnet")))):
-        errors.append(":vultr-vpc-subnet must be an IPv4 CIDR, e.g. 10.50.0.0/24")
     # Restricting the origin to Cloudflare's ranges and NOT proxying the
     # record are mutually exclusive, and the failure is silent until the
     # certificate is needed: Caddy answers the ACME HTTP-01 challenge on :80,
@@ -264,8 +272,13 @@ def state_errors(opts: dict) -> list[str]:
     if not (missing(opts.get("r2-credential-sharing"))
             or _s(opts.get("r2-credential-sharing")) in ("split", "shared-accepted")):
         errors.append(":r2-credential-sharing must be split or shared-accepted")
-    if not (missing(opts.get("vultr-os-id")) or _is_int(opts.get("vultr-os-id"))):
-        errors.append(":vultr-os-id must be Vultr's numeric operating-system id")
+
+    # --- compute: the Compute Cluster Standard's checks are ONCE's over the
+    # spec — selection, the SSH source list, the Vultr os id and name rules,
+    # the canonical VPC CIDR, and the six fallback addresses inside it.
+    # `vultr-http-sources` is not among them: it accepts the symbolic
+    # `cloudflare`, resolved by this package, and its one rule is above.
+    errors += once_cluster.state_errors(spec, opts)
     return errors
 
 
@@ -274,8 +287,9 @@ def backend_secrets(opts: dict) -> list[str]:
     return entry.get("secrets", [])
 
 
-# What talking to the providers needs, on any real event.
-provider_secrets = ["vultr-api-key", "cloudflare-api-token"]
+# What talking to Cloudflare needs, on any real event. The compute provider's
+# credential comes from the registry.
+dns_secrets = ["cloudflare-api-token"]
 
 # The two pairs that reach hosts on a create. `neon-r2-*` is what the
 # getcolors/neon play reads for the storage tier; `langfuse-storage-r2-*` is
@@ -298,10 +312,13 @@ def _same_pair(opts: dict, a: str, b: str) -> bool:
 
 
 def secret_errors(opts: dict, event: str) -> list[str]:
-    """Credentials a real event needs. A delete tears down infrastructure and
-    never converges anything, so it asks for the provider credentials only."""
+    """Credentials a real event needs: the selected compute provider's,
+    Cloudflare's, the backend's, and on a create the storage and application
+    secrets. A delete tears down infrastructure and never converges anything,
+    so it asks for the provider credentials only."""
     create = event == "create"
-    keys = [*provider_secrets,
+    keys = [*once_compute.secrets(spec, opts),
+            *dns_secrets,
             *((storage_secrets + application_secrets) if create else []),
             *backend_secrets(opts)]
     errors = [f"required credential is not set: {par_name(k)}"
@@ -342,7 +359,7 @@ def secret_errors(opts: dict, event: str) -> list[str]:
 
 def tofu_env(opts: dict, slot: str) -> dict[str, str]:
     if slot == "provider-compute":
-        return {"vultr-api-key": "VULTR_API_KEY"}
+        return once_compute.tofu_env(spec, opts)
     if slot == "provider-dns":
         return {"cloudflare-api-token": "CLOUDFLARE_API_TOKEN"}
     if slot == "provider-backend":

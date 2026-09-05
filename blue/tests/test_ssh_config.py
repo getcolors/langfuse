@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from package_langfuse_blue import ssh_config as sc
+from package_langfuse_blue import topology
 
-opts = {"profile": "langfuse-test", "vultr-vpc-subnet": "10.50.0.0/24"}
+opts = {"profile": "langfuse-test", "provider-compute": "vultr", "vultr-vpc-subnet": "10.50.0.0/24"}
 
 
 def test_the_bare_profile_plus_one_alias_per_machine():
@@ -11,6 +12,13 @@ def test_the_bare_profile_plus_one_alias_per_machine():
         "langfuse-test-clickhouse-0", "langfuse-test-clickhouse-1", "langfuse-test-clickhouse-2",
         "langfuse-test-app"]
     assert sc.identity_file(opts) == "~/.ssh/langfuse-test"
+    # The aliases follow the profile, not the machine label (Compute Cluster
+    # Standard §6).
+    renamed = {**opts, "vultr-name": "custom"}
+    assert sc.machine_alias(renamed, {"role": "clickhouse", "index": 1, "name": "custom-clickhouse-1"}) \
+        == "langfuse-test-clickhouse-1"
+    assert sc.machine_alias(renamed, {"role": "app", "index": None, "name": "custom-app"}) == "langfuse-test-app"
+    assert [sc.machine_alias(renamed, h) for h in topology.hosts(renamed)] == sc.aliases(renamed)[1:]
 
 
 def test_a_foreign_stanza_for_any_alias_is_detected():

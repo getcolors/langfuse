@@ -270,20 +270,23 @@ resource "vultr_firewall_rule" "clickhouse_internal" {
   subnet_size       = 32
 }
 
-# The SSH Keypair Standard's contract: ownership is the resource id recorded
-# in state and surfaced as `params.ssh_key_id`. `hosts` is what every later
-# stage consumes: role, ordinal, label, public and VPC address.
+# The Compute Cluster Standard's contract: `provider` names the template that
+# produced this state, ownership of the machine key is the resource id recorded
+# in state and surfaced as `params.ssh_key_id`, and `nodes` is what every later
+# stage consumes: role, 0-based index within the role, label, public and VPC
+# address.
 output "params" {
   value = {
+    provider = "vultr"
     ssh_key_id = vultr_ssh_key.machine.id
-    hosts = concat(
+    nodes = concat(
       [{
-        role = "neon", index = null, name = vultr_instance.neon.label
+        role = "neon", index = 0, name = vultr_instance.neon.label
         ip = vultr_instance.neon.main_ip, vpc_ip = vultr_instance.neon.internal_ip
         user = "root", sudoer = "root"
       }],
       [{
-        role = "redis", index = null, name = vultr_instance.redis.label
+        role = "redis", index = 0, name = vultr_instance.redis.label
         ip = vultr_instance.redis.main_ip, vpc_ip = vultr_instance.redis.internal_ip
         user = "root", sudoer = "root"
       }],
@@ -293,7 +296,7 @@ output "params" {
         user = "root", sudoer = "root"
       }],
       [{
-        role = "app", index = null, name = vultr_instance.app.label
+        role = "app", index = 0, name = vultr_instance.app.label
         ip = vultr_instance.app.main_ip, vpc_ip = vultr_instance.app.internal_ip
         user = "root", sudoer = "root"
       }]
