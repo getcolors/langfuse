@@ -4,7 +4,7 @@
 # dependencies = ["package-langfuse-blue", "blue"]
 #
 # [tool.uv.sources]
-# package-langfuse-blue = { git = "https://github.com/getcolors/langfuse.git", rev = "c18f2540b609672159aa7e31ca3ab89a132a48a4", subdirectory = "blue" }
+# package-langfuse-blue = { git = "https://github.com/getcolors/langfuse.git", rev = "14b2f39a94653e21520f49800b165f0ffcb49a80", subdirectory = "blue" }
 # package-neon-blue = { git = "https://github.com/getcolors/neon.git", rev = "87c009549a928fdf1f9dc135f9740c3baa5782d7", subdirectory = "blue" }
 # package-once-blue = { git = "https://github.com/getcolors/once.git", rev = "b1628b7f8546c10fa9b768565bfd839512cb49ca", subdirectory = "blue" }
 # blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
