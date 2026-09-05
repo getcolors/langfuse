@@ -1,28 +1,28 @@
-resource "vultr_vpc" "langfuse" {
-resource "vultr_firewall_group" "app" {
-resource "vultr_firewall_group" "neon" {
-resource "vultr_firewall_group" "redis" {
-resource "vultr_firewall_group" "clickhouse" {
-resource "vultr_firewall_rule" "ssh_app" {
-  for_each          = toset(local.ssh_sources)
-resource "vultr_firewall_rule" "ssh_neon" {
-  for_each          = toset(local.ssh_sources)
-resource "vultr_firewall_rule" "ssh_redis" {
-  for_each          = toset(local.ssh_sources)
-resource "vultr_firewall_rule" "ssh_clickhouse" {
-  for_each          = toset(local.ssh_sources)
-resource "vultr_firewall_rule" "http" {
-  for_each          = toset(local.http_sources)
-resource "vultr_firewall_rule" "https" {
-  for_each          = toset(local.http_sources)
-resource "vultr_instance" "neon" {
-resource "vultr_instance" "redis" {
-resource "vultr_instance" "clickhouse" {
-  count             = local.clickhouse_node_count
-resource "vultr_instance" "app" {
-resource "vultr_firewall_rule" "neon_from_app" {
-resource "vultr_firewall_rule" "redis_from_app" {
-resource "vultr_firewall_rule" "clickhouse_from_app" {
-  count             = length(local.app_clickhouse_ports)
-resource "vultr_firewall_rule" "clickhouse_internal" {
-  count             = local.clickhouse_node_count * length(local.clickhouse_internal_ports)
+vultr_vpc.langfuse
+vultr_firewall_group.app
+vultr_firewall_group.neon
+vultr_firewall_group.redis
+vultr_firewall_group.clickhouse
+vultr_firewall_rule.ssh_app
+vultr_firewall_rule.ssh_app for_each = toset(local.ssh_sources)
+vultr_firewall_rule.ssh_neon
+vultr_firewall_rule.ssh_neon for_each = toset(local.ssh_sources)
+vultr_firewall_rule.ssh_redis
+vultr_firewall_rule.ssh_redis for_each = toset(local.ssh_sources)
+vultr_firewall_rule.ssh_clickhouse
+vultr_firewall_rule.ssh_clickhouse for_each = toset(local.ssh_sources)
+vultr_firewall_rule.http
+vultr_firewall_rule.http for_each = toset(local.http_sources)
+vultr_firewall_rule.https
+vultr_firewall_rule.https for_each = toset(local.http_sources)
+vultr_instance.neon
+vultr_instance.redis
+vultr_instance.clickhouse
+vultr_instance.clickhouse count = local.clickhouse_node_count
+vultr_instance.app
+vultr_firewall_rule.neon_from_app
+vultr_firewall_rule.redis_from_app
+vultr_firewall_rule.clickhouse_from_app
+vultr_firewall_rule.clickhouse_from_app count = length(local.app_clickhouse_ports)
+vultr_firewall_rule.clickhouse_internal
+vultr_firewall_rule.clickhouse_internal count = local.clickhouse_node_count * length(local.clickhouse_internal_ports)
