@@ -33,14 +33,16 @@
        "# [tool.uv.sources]\n"
        "# package-langfuse-blue = { git = \"https://github.com/getcolors/langfuse.git\", rev = \"" sha "\", subdirectory = \"blue\" }\n"
        "# package-neon-blue = { git = \"https://github.com/getcolors/neon.git\", rev = \"87c009549a928fdf1f9dc135f9740c3baa5782d7\", subdirectory = \"blue\" }\n"
-       "# package-once-blue = { git = \"https://github.com/getcolors/once.git\", rev = \"759eb0311b4bdf881eab813cfe5d00f76b9310cc\", subdirectory = \"blue\" }\n"
+       "# package-once-blue = { git = \"https://github.com/getcolors/once.git\", rev = \"b1628b7f8546c10fa9b768565bfd839512cb49ca\", subdirectory = \"blue\" }\n"
        "# blue = { git = \"https://github.com/getcolors/blue.git\", rev = \"290f313ead5ca162875c33a049c880da017eae09\" }\n"
        "#\n"
        ;; package-once-blue and package-neon-blue carry their own, older blue
-       ;; pins; the override makes this package's blue pin win, as it does in
-       ;; blue/pyproject.toml.
+       ;; pins, and package-neon-blue carries its own, older ONCE pin; the
+       ;; overrides make this package's blue and ONCE pins win, as they do in
+       ;; blue/pyproject.toml. Without the ONCE override uv refuses the two
+       ;; ONCE URLs as a conflict, from a copied payload only (launcher.sh).
        "# [tool.uv]\n"
-       "# override-dependencies = [\"blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09\"]\n"
+       "# override-dependencies = [\"blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09\", \"package-once-blue @ git+https://github.com/getcolors/once.git@b1628b7f8546c10fa9b768565bfd839512cb49ca#subdirectory=blue\"]\n"
        "# ///"))
 (defn stamp-blue [s sha]
   ;; First stamp is structural: the metadata block gains its git sources and the

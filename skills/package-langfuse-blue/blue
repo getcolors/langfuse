@@ -10,7 +10,7 @@
 # blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
 #
 # [tool.uv]
-# override-dependencies = ["blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09"]
+# override-dependencies = ["blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09", "package-once-blue @ git+https://github.com/getcolors/once.git@b1628b7f8546c10fa9b768565bfd839512cb49ca#subdirectory=blue"]
 # ///
 #
 # Managed by `bb pin` — do not edit by hand, and never invent a SHA.
