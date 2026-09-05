@@ -32,7 +32,12 @@ locals {
 # id here in keygen mode.
 resource "vultr_ssh_key" "machine" {
   name    = "langfuse-fixture"
-  ssh_key = trimspace(file("/home/build-placeholder/.ssh/langfuse-fixture.pub"))
+  # fileexists: a delete after a completed delete renders this stack with the
+  # key files already gone (the keypair cleanup is the last step) and tofu
+  # evaluates file() even while destroying an empty state. A real create has
+  # generated the file in preflight before this renders, so the empty branch
+  # is never applied.
+  ssh_key = fileexists("/home/build-placeholder/.ssh/langfuse-fixture.pub") ? trimspace(file("/home/build-placeholder/.ssh/langfuse-fixture.pub")) : ""
 }
 
 # The private network carrying every database connection. Nothing on those
