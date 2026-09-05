@@ -327,6 +327,17 @@
       ansible.builtin.systemd_service: {name: clickhouse-backup.timer, enabled: true, state: started, daemon_reload: true}
       when: ordinal == 0
 
+    # A first set now, as the Neon host takes its first Postgres set, so the
+    # monitor has something to measure. Without it describe reports node 0
+    # UNHEALTHY ("newest completed clickhouse backup is 999999h old") from a
+    # clean create until the first nightly run, up to a day later (seen live
+    # on 2026-09-05).
+    - name: Take the first ClickHouse backup set on node 0
+      ansible.builtin.command: /usr/local/sbin/clickhouse-backup
+      register: first_ch
+      changed_when: "'complete' in first_ch.stdout"
+      when: ordinal == 0
+
     - name: Run the monitor once so describe has a result
       ansible.builtin.command: /usr/local/sbin/clickhouse-monitor
       changed_when: false
