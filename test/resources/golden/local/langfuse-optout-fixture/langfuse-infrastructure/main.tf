@@ -136,6 +136,10 @@ resource "vultr_instance" "neon" {
   firewall_group_id = vultr_firewall_group.neon.id
   vpc_ids           = [vultr_vpc.langfuse.id]
   ssh_key_ids = ["00000000-0000-4000-8000-000000000000"]
+  # fileexists for the same reason as the key resource above: a delete after
+  # a completed delete evaluates this connection block with the key files
+  # already gone. The connection is only ever used by the create, which has
+  # generated the file in preflight; the empty branch is never dialled.
   connection {
     type = "ssh"
     user = "root"

@@ -155,11 +155,15 @@ resource "vultr_instance" "neon" {
   vpc_ids           = [vultr_vpc.langfuse.id]
 <% if ssh-keygen %>  ssh_key_ids = [vultr_ssh_key.machine.id]
 <% else %>  ssh_key_ids = ["<{ vultr-ssh-keys }>"]
+  # fileexists for the same reason as the key resource above: a delete after
+  # a completed delete evaluates this connection block with the key files
+  # already gone. The connection is only ever used by the create, which has
+  # generated the file in preflight; the empty branch is never dialled.
 <% endif %>  connection {
     type = "ssh"
     user = "root"
     host = self.main_ip
-<% if ssh-keygen %>    private_key = file("<{ ssh-private-key-path }>")
+<% if ssh-keygen %>    private_key = fileexists("<{ ssh-private-key-path }>") ? file("<{ ssh-private-key-path }>") : ""
 <% endif %>  }
   provisioner "remote-exec" {
     inline = ["ls"]
@@ -180,7 +184,7 @@ resource "vultr_instance" "redis" {
     type = "ssh"
     user = "root"
     host = self.main_ip
-<% if ssh-keygen %>    private_key = file("<{ ssh-private-key-path }>")
+<% if ssh-keygen %>    private_key = fileexists("<{ ssh-private-key-path }>") ? file("<{ ssh-private-key-path }>") : ""
 <% endif %>  }
   provisioner "remote-exec" {
     inline = ["ls"]
@@ -202,7 +206,7 @@ resource "vultr_instance" "clickhouse" {
     type = "ssh"
     user = "root"
     host = self.main_ip
-<% if ssh-keygen %>    private_key = file("<{ ssh-private-key-path }>")
+<% if ssh-keygen %>    private_key = fileexists("<{ ssh-private-key-path }>") ? file("<{ ssh-private-key-path }>") : ""
 <% endif %>  }
   provisioner "remote-exec" {
     inline = ["ls"]
@@ -223,7 +227,7 @@ resource "vultr_instance" "app" {
     type = "ssh"
     user = "root"
     host = self.main_ip
-<% if ssh-keygen %>    private_key = file("<{ ssh-private-key-path }>")
+<% if ssh-keygen %>    private_key = fileexists("<{ ssh-private-key-path }>") ? file("<{ ssh-private-key-path }>") : ""
 <% endif %>  }
   provisioner "remote-exec" {
     inline = ["ls"]

@@ -158,7 +158,7 @@ resource "vultr_instance" "neon" {
     type = "ssh"
     user = "root"
     host = self.main_ip
-    private_key = file("/home/build-placeholder/.ssh/langfuse-fixture")
+    private_key = fileexists("/home/build-placeholder/.ssh/langfuse-fixture") ? file("/home/build-placeholder/.ssh/langfuse-fixture") : ""
   }
   provisioner "remote-exec" {
     inline = ["ls"]
@@ -178,7 +178,7 @@ resource "vultr_instance" "redis" {
     type = "ssh"
     user = "root"
     host = self.main_ip
-    private_key = file("/home/build-placeholder/.ssh/langfuse-fixture")
+    private_key = fileexists("/home/build-placeholder/.ssh/langfuse-fixture") ? file("/home/build-placeholder/.ssh/langfuse-fixture") : ""
   }
   provisioner "remote-exec" {
     inline = ["ls"]
@@ -199,7 +199,7 @@ resource "vultr_instance" "clickhouse" {
     type = "ssh"
     user = "root"
     host = self.main_ip
-    private_key = file("/home/build-placeholder/.ssh/langfuse-fixture")
+    private_key = fileexists("/home/build-placeholder/.ssh/langfuse-fixture") ? file("/home/build-placeholder/.ssh/langfuse-fixture") : ""
   }
   provisioner "remote-exec" {
     inline = ["ls"]
@@ -219,7 +219,7 @@ resource "vultr_instance" "app" {
     type = "ssh"
     user = "root"
     host = self.main_ip
-    private_key = file("/home/build-placeholder/.ssh/langfuse-fixture")
+    private_key = fileexists("/home/build-placeholder/.ssh/langfuse-fixture") ? file("/home/build-placeholder/.ssh/langfuse-fixture") : ""
   }
   provisioner "remote-exec" {
     inline = ["ls"]
