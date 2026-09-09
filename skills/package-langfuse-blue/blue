@@ -1,7 +1,8 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["package-langfuse-blue", "blue"]
+# dependencies = [
+#   "colors-compute-blue @ git+https://github.com/getcolors/colors-compute.git@6325b24d8a7477429164c5bb0b2a0a6454fd8c42#subdirectory=blue","package-langfuse-blue", "blue"]
 #
 # [tool.uv.sources]
 # package-langfuse-blue = { git = "https://github.com/getcolors/langfuse.git", rev = "e66709d7852d2045768fafc89aaf93394baaca05", subdirectory = "blue" }

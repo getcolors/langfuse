@@ -1,7 +1,7 @@
 import { parName } from "red/cli";
 import type { Opts } from "red/workflow";
-import { compute, computeCluster, providers } from "package-once-red";
-import { onceSsh } from "./once.ts";
+import {providers} from "package-once-red";
+import {validate_deployment,backend_plan,keyMode,source_cidrs} from "colors-compute-red";
 import * as topology from "./topology.ts";
 
 export const profilePar = parName("profile");
@@ -10,9 +10,7 @@ export const profilePar = parName("profile");
 // needs and which this module already depends on for the ClickHouse count;
 // they are named here too so the lifecycle reads them from the validator, as
 // the other delegating packages do.
-export const computeProviders = topology.computeProviders;
 export const defaultComputeProvider = topology.defaultComputeProvider;
-export const spec = topology.spec;
 
 // Every key desired state must carry whichever provider is selected. The
 // provider-scoped keys come from `computeProviders`.
@@ -86,17 +84,8 @@ export function missing(value: unknown): boolean {
     (typeof value === "string" && value.trim() === "");
 }
 
-export function computeName(opts: Opts): string {
-  return topology.computeName(opts);
-}
+export function keygen(opts:Opts):boolean{try{return keyMode(opts).mode==='managed';}catch{return true;}}
 
-// Whether this deployment owns its machine keypair. Delegates to ONCE, the
-// standard's reference implementation, so one rule decides it everywhere.
-export function keygen(opts: Opts): boolean {
-  return onceSsh.keygen(opts);
-}
-
-// The human-readable tag out of a `repo:tag@sha256:...` pin, or undefined.
 export function imageVersion(value: unknown): string | undefined {
   return versionTagRe.exec(s(value))?.[1];
 }
@@ -143,15 +132,15 @@ function clickhouseVersionOk(value: unknown): boolean {
 // created network's CIDR and the topology — which are ONCE's over `spec`.
 export function stateErrors(opts: Opts): string[] {
   const errors: string[] = [];
-  for (const key of [...required, ...compute.requiredKeys(spec, opts)]) {
+  for (const key of required) {
     if (missing(opts[key])) errors.push(`:${key} is required`);
   }
 
   if (opts["provider-dns"] !== "cloudflare") {
     errors.push(":provider-dns must be cloudflare");
   }
-  if (!["local", "s3", "r2"].includes(opts["provider-backend"] as string)) {
-    errors.push(":provider-backend must be local, s3, or r2");
+  if (!["s3", "r2"].includes(opts["provider-backend"] as string)) {
+    errors.push(":provider-backend must be s3 or r2");
   }
   if (typeof opts["compute-prevent-destroy"] !== "boolean") {
     errors.push(":compute-prevent-destroy must be true or false");
@@ -285,8 +274,8 @@ export function stateErrors(opts: Opts): string[] {
   // needed: Caddy answers the ACME HTTP-01 challenge on :80, and with the
   // record unproxied that challenge arrives from Let's Encrypt's own
   // addresses, which the firewall drops.
-  if (s(opts["vultr-http-sources"]) === "cloudflare" && opts["cloudflare-proxied"] !== true) {
-    errors.push(":vultr-http-sources cloudflare requires :cloudflare-proxied true, or ACME HTTP-01 is firewalled off and no certificate is ever issued");
+  if (source_cidrs(opts,"http-sources","langfuse-http-sources").join(",") === "cloudflare" && opts["cloudflare-proxied"] !== true) {
+    errors.push(":langfuse-http-sources cloudflare requires :cloudflare-proxied true, or ACME HTTP-01 is firewalled off and no certificate is ever issued");
   }
   if (!(missing(opts["r2-credential-sharing"]) ||
         ["split", "shared-accepted"].includes(s(opts["r2-credential-sharing"])))) {
@@ -298,7 +287,7 @@ export function stateErrors(opts: Opts): string[] {
   // canonical VPC CIDR, and the six fallback addresses inside it.
   // `vultr-http-sources` is not among them: it accepts the symbolic
   // `cloudflare`, resolved by this package, and its one rule is above.
-  errors.push(...computeCluster.stateErrors(spec, opts));
+  try{validate_deployment(opts,topology.topology(opts),topology.requirements(opts));backend_plan(opts,String(opts.profile)+"/compute/shared.tfstate");}catch(error){errors.push(error instanceof Error?error.message:String(error));}
   return errors;
 }
 
@@ -336,7 +325,6 @@ function samePair(opts: Opts, a: string, b: string): boolean {
 export function secretErrors(opts: Opts, event: string): string[] {
   const create = event === "create";
   const keys = [...new Set([
-    ...compute.secrets(spec, opts),
     ...dnsSecrets,
     ...(create ? [...storageSecrets, ...applicationSecrets] : []),
     ...backendSecrets(opts),
@@ -384,8 +372,6 @@ export function secretErrors(opts: Opts, event: string): string[] {
 
 export function tofuEnv(opts: Opts, slot: string): Record<string, string> {
   switch (slot) {
-    case "provider-compute":
-      return compute.tofuEnv(spec, opts);
     case "provider-dns":
       return { "cloudflare-api-token": "CLOUDFLARE_API_TOKEN" };
     case "provider-backend":

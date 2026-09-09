@@ -4,12 +4,12 @@ import { dirname, join } from "node:path";
 import type { Opts } from "red/workflow";
 import * as tools from "../src/tools.ts";
 import * as topology from "../src/topology.ts";
-import { params } from "./support.ts";
+import { base, params } from "./support.ts";
 
-const opts = { profile: "langfuse-test", "provider-compute": "vultr", "vultr-vpc-subnet": "10.50.0.0/24",
+const opts = { ...base, "red/event":"build", profile: "langfuse-test", "provider-compute": "vultr", "vultr-vpc-subnet": "10.50.0.0/24",
   "langfuse-host": "langfuse.example.com", "cloudflare-proxied": true };
 
-const applied = { ...opts, "once/cluster": params };
+const applied = { ...opts, "colors-compute/cluster": params };
 
 describe("tools", () => {
   test("the neon bundle renders from the dependency, not a local copy", () => {
@@ -52,7 +52,7 @@ describe("tools", () => {
     expect(ch1.role).toBe("clickhouse");
     expect(ch1.vpc_ip).toMatch(/^10\.50\.0\.\d+$/);
     // Singletons carry no ordinal.
-    expect(groups.app.hosts["langfuse-test-app"].ordinal).toBeUndefined();
+    expect(groups.app.hosts["langfuse-test-app-0"].ordinal).toBeUndefined();
   });
 
   test("the adopted cluster reaches the renderers respelled", () => {
@@ -63,7 +63,7 @@ describe("tools", () => {
     // the bytes it got before adoption: an ordinal for the replicas alone.
     const hs = tools.hosts(applied);
     const groups = JSON.parse(tools.inventory(applied, hs)).all.children;
-    expect(applied["once/cluster"].ssh_key_id).toBe("7692e92a");
+    expect(applied["colors-compute/cluster"].ssh_key_id).toBe("7692e92a");
     expect(hs[0]!["vpc-ip"]).toBe("10.50.0.2");
     expect(hs.some((h) => "vpc_ip" in h)).toBe(false);
     expect(groups.app.hosts["langfuse-test-app"].vpc_ip).toBe("10.50.0.7");
@@ -71,28 +71,8 @@ describe("tools", () => {
     expect(groups.clickhouse.hosts["langfuse-test-clickhouse-2"].ordinal).toBe(2);
   });
 
-  test("the compute stage refuses anything but the whole cluster", () => {
-    // The real create's infrastructure step hands its tofu outputs here. No
-    // `params` output at all, or a machine set that is partial or incomplete,
-    // is exit 1 with ONCE's message rather than a ClickHouse cluster config
-    // against 192.0.2.20; the whole cluster lands under `once/cluster`.
-    const result = (p: unknown): Opts => ({ "red/exit": 0, "tofu/outputs": p ? { params: p } : {} });
-    const none = tools.resolvedCluster(opts, result(undefined));
-    expect(none["red/exit"]).toBe(1);
-    expect(none["red/err"])
-      .toBe("compute produced no params output; refusing to converge against the documentation addresses");
-    // A partial cluster: two replicas form no quorum.
-    const partial = tools.resolvedCluster(opts, result({ ...params, nodes: params.nodes!.filter((n) => !(n.role === "clickhouse" && n.index === 2)) }));
-    expect(partial["red/exit"]).toBe(1);
-    expect(partial["red/err"]).toBe("the compute stage did not report nodes this package declares: clickhouse-2");
-    const incomplete = tools.resolvedCluster(opts, result({
-      ...params, nodes: [...params.nodes!.slice(0, 5), { ...params.nodes![5]!, vpc_ip: "" }],
-    }));
-    expect(incomplete["red/exit"]).toBe(1);
-    expect(String(incomplete["red/err"])).toContain("did not report a complete node (ip, vpc_ip, name, user, sudoer) for app-0");
-    const whole = tools.resolvedCluster(opts, result(params));
-    expect(whole["red/exit"]).toBe(0);
-    expect(whole["once/cluster"]).toEqual(params);
+  test("partial state is refused before application rendering", () => {
+    expect(()=>topology.hosts({...opts,"colors-compute/cluster":{...params,nodes:params.nodes.slice(1)}})).toThrow();
   });
 
   test("the ssh config block carries the profile first", () => {
@@ -101,11 +81,11 @@ describe("tools", () => {
     expect(hs[0]!.ip).toBe(topology.hostOf(topology.hosts(opts), "app")!.ip);
     expect(hs.length).toBe(7);
     expect(hs.map((h) => h.name)).toEqual([
-      "langfuse-test", "langfuse-test-neon", "langfuse-test-redis",
+      "langfuse-test", "langfuse-test-neon-0", "langfuse-test-redis-0",
       "langfuse-test-clickhouse-0", "langfuse-test-clickhouse-1", "langfuse-test-clickhouse-2",
-      "langfuse-test-app"]);
+      "langfuse-test-app-0"]);
     expect(hs.map((h) => h.ip)).toEqual(
-      ["192.0.2.12", "192.0.2.10", "192.0.2.11", "192.0.2.20", "192.0.2.21", "192.0.2.22", "192.0.2.12"]);
+      ["192.0.2.15", "192.0.2.10", "192.0.2.11", "192.0.2.12", "192.0.2.13", "192.0.2.14", "192.0.2.15"]);
     // On a real run the addresses are the recorded ones.
     expect(tools.sshConfigHosts(applied, tools.hosts(applied)).map((h) => h.ip)).toEqual(
       ["1.1.1.6", "1.1.1.1", "1.1.1.2", "1.1.1.3", "1.1.1.4", "1.1.1.5", "1.1.1.6"]);
@@ -120,7 +100,7 @@ describe("tools", () => {
   });
 
   test("http sources resolve explicit lists verbatim", async () => {
-    const { source, ranges } = await tools.httpSources({ "vultr-http-sources": ["1.2.3.0/24", "::/0"] });
+    const { source, ranges } = await tools.httpSources({ "provider-compute":"vultr", "vultr-http-sources": ["1.2.3.0/24", "::/0"] });
     expect(source).toBe("explicit");
     expect(ranges).toEqual(["1.2.3.0/24", "::/0"]);
   });

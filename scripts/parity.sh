@@ -40,8 +40,11 @@ build_variant() {
   diff -r "$tmp/$variant/green" "$tmp/$variant/blue"
 }
 
-build_variant colors
-build_variant optout
+for backend in s3 r2; do
+  export COLORS_PAR_PROVIDER_BACKEND="$backend"
+  build_variant colors
+  build_variant optout
+done
 
 diff -r "$root/green/src/resources/io/github/getcolors/langfuse" "$root/red/resources"
 diff -r "$root/green/src/resources/io/github/getcolors/langfuse" "$root/blue/src/package_langfuse_blue/resources"

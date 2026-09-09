@@ -19,7 +19,7 @@ import os
 import re
 from pathlib import Path
 
-from package_once_blue import compute_cluster as once_cluster
+from colors_compute.contract import expand
 
 from . import topology
 
@@ -38,28 +38,12 @@ def identity_file(opts: dict) -> str:
     return f"~/.ssh/{host_alias(opts)}"
 
 
-def aliases(opts: dict) -> list[str]:
-    """Every alias this deployment owns: the bare profile, and one per machine
-    — `<profile>-<role>` for the singletons, `<profile>-clickhouse-<i>` for
-    the replicas. ONCE derives the list from the spec (Compute Cluster
-    Standard §6). Six machines are operable only if each can be reached by
-    name; the bare profile keeps `ssh <profile>` meaning what it means in
-    every other deployment."""
-    return once_cluster.aliases(topology.spec, opts)
+def aliases(opts):
+    return [host_alias(opts), *[host_alias(opts) + '-' + n['node_id'] for n in expand(topology.topology(opts))]]
 
 
-def machine_alias(opts: dict, host: dict) -> str:
-    """The alias for one machine: its entry in ONCE's list, paired with the
-    host by id. Derived from the profile, not from the machine's label, so an
-    operator who set `vultr-name` still reaches every machine as
-    `<profile>-<role>[-<i>]`."""
-    _profile, *per_node = aliases(opts)
-    index = host.get("index")
-    wanted = {"role": host.get("role"), "index": 0 if index is None else index}
-    for alias, id in zip(per_node, once_cluster.node_ids(topology.spec, opts)):
-        if id == wanted:
-            return alias
-    return ""
+def machine_alias(opts, host):
+    return host_alias(opts) + '-' + host['node_id']
 
 
 def config_path() -> Path:

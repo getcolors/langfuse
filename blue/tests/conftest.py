@@ -26,37 +26,14 @@ PARAMS = {
     ],
 }
 
-# The shape `langfuse-vultr` recorded before adoption, as `tofu output -json`
-# delivers it to the reader: `hosts` rather than `nodes`, `index: null` on the
-# four singletons, no `provider`.
-LEGACY_RAW = {
-    "ssh_key_id": "7692e92a",
-    "hosts": [
-        {"role": "neon", "index": None, "name": "langfuse-vultr-neon", "ip": "203.0.113.1",
-         "vpc_ip": "10.50.0.3", "user": "root", "sudoer": "root"},
-        {"role": "redis", "index": None, "name": "langfuse-vultr-redis", "ip": "203.0.113.2",
-         "vpc_ip": "10.50.0.4", "user": "root", "sudoer": "root"},
-        {"role": "clickhouse", "index": 0, "name": "langfuse-vultr-clickhouse-0", "ip": "203.0.113.3",
-         "vpc_ip": "10.50.0.5", "user": "root", "sudoer": "root"},
-        {"role": "clickhouse", "index": 1, "name": "langfuse-vultr-clickhouse-1", "ip": "203.0.113.4",
-         "vpc_ip": "10.50.0.6", "user": "root", "sudoer": "root"},
-        {"role": "clickhouse", "index": 2, "name": "langfuse-vultr-clickhouse-2", "ip": "203.0.113.5",
-         "vpc_ip": "10.50.0.7", "user": "root", "sudoer": "root"},
-        {"role": "app", "index": None, "name": "langfuse-vultr-app", "ip": "203.0.113.6",
-         "vpc_ip": "10.50.0.8", "user": "root", "sudoer": "root"},
-    ],
-}
-
-LEGACY_TRANSLATED = {
-    "ssh_key_id": "7692e92a",
-    "provider": "vultr",
-    "nodes": [{**h, "index": 0 if h["index"] is None else h["index"]} for h in LEGACY_RAW["hosts"]],
-}
+for node in PARAMS['nodes']:
+    node['node_id'] = node['role'] + '-' + str(node['index'])
+    node['provider'] = 'vultr'
 
 
 def _load(name: str, overrides: dict | None = None) -> dict:
     text = (ROOT / "test" / "fixtures" / name).read_text().replace("WORKDIR", ".colors")
-    return {**load_yaml(text), **(overrides or {})}
+    return {**load_yaml(text), "provider-backend": "r2", **(overrides or {})}
 
 
 def fixture(overrides: dict | None = None) -> dict:

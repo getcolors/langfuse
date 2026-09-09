@@ -15,7 +15,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [io.github.getcolors.langfuse.topology :as topology]
-            [io.github.getcolors.once.compute-cluster :as once-cluster]))
+            [io.github.getcolors.compute :as library]))
 
 (defn host-alias
   "The profile, unchanged. Standard §2: the profile already keys remote state,
@@ -39,7 +39,7 @@
   bare profile keeps `ssh <profile>` meaning what it means in every other
   deployment."
   [opts]
-  (once-cluster/aliases topology/spec opts))
+  (into [(:profile opts)] (map #(str (:profile opts) "-" (:node_id %)) (library/expand (topology/topology opts)))))
 
 (defn machine-alias
   "The alias for one machine: its entry in ONCE's list, paired with the host
@@ -47,11 +47,10 @@
   operator who set `vultr-name` still reaches every machine as
   `<profile>-<role>[-<i>]`."
   [opts host]
-  (get (zipmap (once-cluster/node-ids topology/spec opts) (rest (aliases opts)))
-       {:role (:role host) :index (or (:index host) 0)}))
+  (str (:profile opts) "-" (:role host) "-" (or (:index host) 0)))
 
 (defn config-path []
-  (io/file (System/getProperty "user.home") ".ssh" "config"))
+  (io/file (or (not-empty (System/getenv "HOME")) (System/getProperty "user.home")) ".ssh" "config"))
 
 (defn begin-marker [alias] (str "# BEGIN " alias " ANSIBLE MANAGED BLOCK"))
 (defn end-marker [alias] (str "# END " alias " ANSIBLE MANAGED BLOCK"))

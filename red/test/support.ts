@@ -1,7 +1,7 @@
 // Fixtures the red suites share. Not a test file: importing one test file
 // from another would register its cases twice.
 import type { Opts } from "red/workflow";
-import { computeCluster } from "package-once-red";
+
 
 // A minimal valid desired state, kept complete on purpose: `stateErrors`
 // reports every problem at once, so a fixture missing keys would make every
@@ -60,7 +60,7 @@ export const creds: Opts = {
 // The compute stage's recorded `params`, as ONCE reads it: snake_case node
 // keys, every field present, a 0-based index on every node — the shape the
 // template outputs since adoption.
-export const params: computeCluster.ClusterParams = {
+export const params: any = {
   provider: "vultr",
   ssh_key_id: "7692e92a",
   nodes: [
@@ -73,23 +73,5 @@ export const params: computeCluster.ClusterParams = {
   ],
 };
 
-// The shape `langfuse-vultr` recorded before adoption, as `tofu output -json`
-// delivers it to the reader: `hosts` rather than `nodes`, `index: null` on the
-// four singletons, no `provider`.
-export const legacyRaw: Record<string, unknown> = {
-  ssh_key_id: "7692e92a",
-  hosts: [
-    { role: "neon", index: null, name: "langfuse-vultr-neon", ip: "203.0.113.1", vpc_ip: "10.50.0.3", user: "root", sudoer: "root" },
-    { role: "redis", index: null, name: "langfuse-vultr-redis", ip: "203.0.113.2", vpc_ip: "10.50.0.4", user: "root", sudoer: "root" },
-    { role: "clickhouse", index: 0, name: "langfuse-vultr-clickhouse-0", ip: "203.0.113.3", vpc_ip: "10.50.0.5", user: "root", sudoer: "root" },
-    { role: "clickhouse", index: 1, name: "langfuse-vultr-clickhouse-1", ip: "203.0.113.4", vpc_ip: "10.50.0.6", user: "root", sudoer: "root" },
-    { role: "clickhouse", index: 2, name: "langfuse-vultr-clickhouse-2", ip: "203.0.113.5", vpc_ip: "10.50.0.7", user: "root", sudoer: "root" },
-    { role: "app", index: null, name: "langfuse-vultr-app", ip: "203.0.113.6", vpc_ip: "10.50.0.8", user: "root", sudoer: "root" },
-  ],
-};
 
-export const legacyTranslated: computeCluster.ClusterParams = {
-  ssh_key_id: "7692e92a",
-  provider: "vultr",
-  nodes: (legacyRaw.hosts as Record<string, unknown>[]).map((h) => ({ ...h, index: h.index ?? 0 })) as computeCluster.Node[],
-};
+params.nodes = params.nodes.map((n:any)=>({...n,node_id:`${n.role}-${n.index}`,provider:"vultr"}));

@@ -1,30 +1,16 @@
 (ns io.github.getcolors.langfuse.validate
   (:require [clojure.string :as str]
             [green.cli :as green-cli]
-            [io.github.getcolors.once.compute :as compute]
-            [io.github.getcolors.once.compute-cluster :as once-cluster]
-            [io.github.getcolors.once.ssh :as once-ssh]
+            [io.github.getcolors.compute :as library]
+            [io.github.getcolors.compute-planning :as planning]
+            [io.github.getcolors.compute-deployment-request :as deployment]
+            [io.github.getcolors.compute-ssh :as compute-ssh]
             [io.github.getcolors.once.validate :as once-validate]
             [io.github.getcolors.langfuse.topology :as topology]))
 
 (def profile-par (green-cli/par-name :profile))
 
-;; The registry and the spec live in `topology`, which every host derivation
-;; needs and which this namespace already depends on for the ClickHouse count;
-;; they are named here too so the lifecycle reads them from the validator, as
-;; the other delegating packages do.
-(def compute-providers
-  "The advertised compute providers and what each implies (Compute Provider
-  Standard §2, Compute Cluster Standard §2). `topology/compute-providers`."
-  topology/compute-providers)
-
-(def default-compute-provider
-  "What a legacy state without `params.provider` is. `topology/default-compute-provider`."
-  topology/default-compute-provider)
-
-(def spec
-  "How this package describes itself to ONCE's `compute-cluster`. `topology/spec`."
-  topology/spec)
+(def default-compute-provider topology/default-compute-provider)
 
 (def required
   "Every key desired state must carry whichever provider is selected. The
@@ -83,8 +69,7 @@
 
 (defn missing? [x] (or (nil? x) (and (string? x) (str/blank? x))))
 
-(defn compute-name [opts] (topology/compute-name opts))
-(defn keygen? [opts] (once-ssh/keygen? opts))
+(defn keygen? [opts] (try (= "managed" (:mode (compute-ssh/mode opts))) (catch Exception _ true)))
 
 (defn image-version
   "The human-readable tag out of a `repo:tag@sha256:...` pin, or nil."
@@ -119,14 +104,14 @@
   [opts]
   (vec
    (concat
-    (for [k (concat required (compute/required-keys spec opts))
+    (for [k required
           :when (missing? (get opts k))]
       (str k " is required"))
 
     (when-not (= "cloudflare" (:provider-dns opts))
       [":provider-dns must be cloudflare"])
-    (when-not (contains? #{"local" "s3" "r2"} (:provider-backend opts))
-      [":provider-backend must be local, s3, or r2"])
+    (when-not (contains? #{"s3" "r2"} (:provider-backend opts))
+      [":provider-backend must be s3 or r2"])
     (when-not (boolean? (:compute-prevent-destroy opts))
       [":compute-prevent-destroy must be true or false"])
 
@@ -240,9 +225,9 @@
     ;; certificate is needed: Caddy answers the ACME HTTP-01 challenge on :80,
     ;; and with the record unproxied that challenge arrives from Let's
     ;; Encrypt's own addresses, which the firewall drops.
-    (when (and (= "cloudflare" (str (:vultr-http-sources opts)))
+    (when (and (= ["cloudflare"] (deployment/source-cidrs opts "http-sources" "langfuse-http-sources"))
                (not (true? (:cloudflare-proxied opts))))
-      [":vultr-http-sources cloudflare requires :cloudflare-proxied true, or ACME HTTP-01 is firewalled off and no certificate is ever issued"])
+      [":langfuse-http-sources cloudflare requires :cloudflare-proxied true, or ACME HTTP-01 is firewalled off and no certificate is ever issued"])
     (when-not (or (missing? (:r2-credential-sharing opts))
                   (contains? #{"split" "shared-accepted"} (str (:r2-credential-sharing opts))))
       [":r2-credential-sharing must be split or shared-accepted"])
@@ -252,7 +237,10 @@
     ;; the canonical VPC CIDR, and the six fallback addresses inside it.
     ;; `vultr-http-sources` is not among them: it accepts the symbolic
     ;; `cloudflare`, resolved by this package, and its one rule is above.
-    (once-cluster/state-errors spec opts))))
+    (try
+      (planning/validate-deployment opts (topology/topology opts) (topology/requirements opts))
+      (library/backend-plan opts (str (:profile opts) "/compute/shared.tfstate")) []
+      (catch Exception error [(.getMessage error)])))))
 
 (defn backend-secrets [opts]
   (:secrets (get-in once-validate/providers
@@ -288,8 +276,7 @@
   so it asks for the provider credentials only."
   [opts event]
   (let [create? (= :create event)
-        ks (concat (compute/secrets spec opts)
-                   dns-secrets
+        ks (concat dns-secrets
                    (when create? (concat storage-secrets application-secrets))
                    (backend-secrets opts))]
     (concat
@@ -326,7 +313,7 @@
 
 (defn tofu-env [opts slot]
   (case slot
-    :provider-compute (compute/tofu-env spec opts)
+    :provider-compute {}
     :provider-dns     {:cloudflare-api-token "CLOUDFLARE_API_TOKEN"}
     :provider-backend (:tofu-env (get-in once-validate/providers
                                          [:provider-backend (:provider-backend opts)]) {})

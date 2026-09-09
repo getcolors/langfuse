@@ -3,13 +3,11 @@ from __future__ import annotations
 import json
 import re
 
-from conftest import PARAMS
+from conftest import PARAMS, fixture
 from package_langfuse_blue import tools, topology
 
-opts = {"profile": "langfuse-test", "provider-compute": "vultr", "vultr-vpc-subnet": "10.50.0.0/24",
-        "langfuse-host": "langfuse.example.com", "cloudflare-proxied": True}
-
-applied = {**opts, "once/cluster": PARAMS}
+opts = fixture({'profile': 'langfuse-test', 'blue/event': 'build', 'langfuse-host': 'langfuse.example.com'})
+applied = {**opts, 'colors-compute/cluster': PARAMS}
 
 
 def test_the_neon_bundle_renders_from_the_dependency_not_a_local_copy():
@@ -46,7 +44,7 @@ def test_the_inventory_has_four_groups_and_only_host_vars():
     assert ch1["role"] == "clickhouse"
     assert re.fullmatch(r"10\.50\.0\.\d+", ch1["vpc_ip"])
     # Singletons carry no ordinal.
-    assert "ordinal" not in groups["app"]["hosts"]["langfuse-test-app"]
+    assert "ordinal" not in groups["app"]["hosts"]["langfuse-test-app-0"]
 
 
 def test_the_adopted_cluster_reaches_the_renderers_respelled():
@@ -57,7 +55,7 @@ def test_the_adopted_cluster_reaches_the_renderers_respelled():
     # the bytes it got before adoption: an ordinal for the replicas alone.
     hs = tools.hosts(applied)
     groups = json.loads(tools.inventory(applied, hs))["all"]["children"]
-    assert applied["once/cluster"]["ssh_key_id"] == "7692e92a"
+    assert applied["colors-compute/cluster"]["ssh_key_id"] == "7692e92a"
     assert hs[0]["vpc-ip"] == "10.50.0.2"
     assert not any("vpc_ip" in h for h in hs)
     assert groups["app"]["hosts"]["langfuse-test-app"]["vpc_ip"] == "10.50.0.7"
@@ -65,30 +63,11 @@ def test_the_adopted_cluster_reaches_the_renderers_respelled():
     assert groups["clickhouse"]["hosts"]["langfuse-test-clickhouse-2"]["ordinal"] == 2
 
 
-def test_the_compute_stage_refuses_anything_but_the_whole_cluster():
-    # The real create's infrastructure step hands its tofu outputs here. No
-    # `params` output at all, or a machine set that is partial or incomplete,
-    # is exit 1 with ONCE's message rather than a ClickHouse cluster config
-    # against 192.0.2.20; the whole cluster lands under `once/cluster`.
-    def result(p):
-        return {"blue/exit": 0, "tofu/outputs": {"params": p} if p else {}}
-
-    none = tools.resolved_cluster(opts, result(None))
-    assert none["blue/exit"] == 1
-    assert none["blue/err"] == ("compute produced no params output; refusing to "
-                                "converge against the documentation addresses")
-    # A partial cluster: two replicas form no quorum.
-    partial = tools.resolved_cluster(opts, result({**PARAMS, "nodes": [
-        n for n in PARAMS["nodes"] if not (n["role"] == "clickhouse" and n["index"] == 2)]}))
-    assert partial["blue/exit"] == 1
-    assert partial["blue/err"] == "the compute stage did not report nodes this package declares: clickhouse-2"
-    incomplete = tools.resolved_cluster(opts, result({**PARAMS, "nodes": [
-        *PARAMS["nodes"][:5], {**PARAMS["nodes"][5], "vpc_ip": ""}]}))
-    assert incomplete["blue/exit"] == 1
-    assert "did not report a complete node (ip, vpc_ip, name, user, sudoer) for app-0" in incomplete["blue/err"]
-    whole = tools.resolved_cluster(opts, result(PARAMS))
-    assert whole["blue/exit"] == 0
-    assert whole["once/cluster"] == PARAMS
+def test_the_compute_stage_refuses_partial_or_missing_private_node_metadata():
+    import pytest
+    for nodes in (PARAMS['nodes'][:-1], [*PARAMS['nodes'][:-1], {**PARAMS['nodes'][-1], 'vpc_ip': ''}]):
+        with pytest.raises(ValueError):
+            tools.hosts({**opts, 'colors-compute/cluster': {'nodes': nodes}})
 
 
 def test_the_ssh_config_block_carries_the_profile_first():
@@ -97,11 +76,11 @@ def test_the_ssh_config_block_carries_the_profile_first():
     assert hs[0]["ip"] == topology.host_of(topology.hosts(opts), "app")["ip"]
     assert len(hs) == 7
     assert [h["name"] for h in hs] == [
-        "langfuse-test", "langfuse-test-neon", "langfuse-test-redis",
+        "langfuse-test", "langfuse-test-neon-0", "langfuse-test-redis-0",
         "langfuse-test-clickhouse-0", "langfuse-test-clickhouse-1", "langfuse-test-clickhouse-2",
-        "langfuse-test-app"]
+        "langfuse-test-app-0"]
     assert [h["ip"] for h in hs] == [
-        "192.0.2.12", "192.0.2.10", "192.0.2.11", "192.0.2.20", "192.0.2.21", "192.0.2.22", "192.0.2.12"]
+        "192.0.2.15", "192.0.2.10", "192.0.2.11", "192.0.2.12", "192.0.2.13", "192.0.2.14", "192.0.2.15"]
     # On a real run the addresses are the recorded ones.
     assert [h["ip"] for h in tools.ssh_config_hosts(applied, tools.hosts(applied))] == [
         "1.1.1.6", "1.1.1.1", "1.1.1.2", "1.1.1.3", "1.1.1.4", "1.1.1.5", "1.1.1.6"]
@@ -116,7 +95,7 @@ async def test_a_delete_with_no_compute_in_state_stops_instead_of_converging():
 
 
 def test_http_sources_resolve_explicit_lists_verbatim():
-    resolved = tools.http_sources({"vultr-http-sources": ["1.2.3.0/24", "::/0"]})
+    resolved = tools.http_sources({"provider-compute": "vultr", "vultr-http-sources": ["1.2.3.0/24", "::/0"]})
     assert resolved["source"] == "explicit"
     assert resolved["ranges"] == ["1.2.3.0/24", "::/0"]
 

@@ -1,0 +1,610 @@
+{
+  "locals": {
+    "ingress": {
+      "app:http-443:103.21.244.0/22": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "103.21.244.0",
+        "subnet_size": 22
+      },
+      "app:http-443:103.22.200.0/22": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "103.22.200.0",
+        "subnet_size": 22
+      },
+      "app:http-443:103.31.4.0/22": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "103.31.4.0",
+        "subnet_size": 22
+      },
+      "app:http-443:104.16.0.0/13": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "104.16.0.0",
+        "subnet_size": 13
+      },
+      "app:http-443:104.24.0.0/14": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "104.24.0.0",
+        "subnet_size": 14
+      },
+      "app:http-443:108.162.192.0/18": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "108.162.192.0",
+        "subnet_size": 18
+      },
+      "app:http-443:131.0.72.0/22": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "131.0.72.0",
+        "subnet_size": 22
+      },
+      "app:http-443:141.101.64.0/18": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "141.101.64.0",
+        "subnet_size": 18
+      },
+      "app:http-443:162.158.0.0/15": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "162.158.0.0",
+        "subnet_size": 15
+      },
+      "app:http-443:172.64.0.0/13": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "172.64.0.0",
+        "subnet_size": 13
+      },
+      "app:http-443:173.245.48.0/20": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "173.245.48.0",
+        "subnet_size": 20
+      },
+      "app:http-443:188.114.96.0/20": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "188.114.96.0",
+        "subnet_size": 20
+      },
+      "app:http-443:190.93.240.0/20": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "190.93.240.0",
+        "subnet_size": 20
+      },
+      "app:http-443:197.234.240.0/22": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "197.234.240.0",
+        "subnet_size": 22
+      },
+      "app:http-443:198.41.128.0/17": {
+        "ip_type": "v4",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "198.41.128.0",
+        "subnet_size": 17
+      },
+      "app:http-443:2400:cb00::/32": {
+        "ip_type": "v6",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2400:cb00::",
+        "subnet_size": 32
+      },
+      "app:http-443:2405:8100::/32": {
+        "ip_type": "v6",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2405:8100::",
+        "subnet_size": 32
+      },
+      "app:http-443:2405:b500::/32": {
+        "ip_type": "v6",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2405:b500::",
+        "subnet_size": 32
+      },
+      "app:http-443:2606:4700::/32": {
+        "ip_type": "v6",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2606:4700::",
+        "subnet_size": 32
+      },
+      "app:http-443:2803:f800::/32": {
+        "ip_type": "v6",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2803:f800::",
+        "subnet_size": 32
+      },
+      "app:http-443:2a06:98c0::/29": {
+        "ip_type": "v6",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2a06:98c0::",
+        "subnet_size": 29
+      },
+      "app:http-443:2c0f:f248::/32": {
+        "ip_type": "v6",
+        "port": "443",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2c0f:f248::",
+        "subnet_size": 32
+      },
+      "app:http-80:103.21.244.0/22": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "103.21.244.0",
+        "subnet_size": 22
+      },
+      "app:http-80:103.22.200.0/22": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "103.22.200.0",
+        "subnet_size": 22
+      },
+      "app:http-80:103.31.4.0/22": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "103.31.4.0",
+        "subnet_size": 22
+      },
+      "app:http-80:104.16.0.0/13": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "104.16.0.0",
+        "subnet_size": 13
+      },
+      "app:http-80:104.24.0.0/14": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "104.24.0.0",
+        "subnet_size": 14
+      },
+      "app:http-80:108.162.192.0/18": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "108.162.192.0",
+        "subnet_size": 18
+      },
+      "app:http-80:131.0.72.0/22": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "131.0.72.0",
+        "subnet_size": 22
+      },
+      "app:http-80:141.101.64.0/18": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "141.101.64.0",
+        "subnet_size": 18
+      },
+      "app:http-80:162.158.0.0/15": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "162.158.0.0",
+        "subnet_size": 15
+      },
+      "app:http-80:172.64.0.0/13": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "172.64.0.0",
+        "subnet_size": 13
+      },
+      "app:http-80:173.245.48.0/20": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "173.245.48.0",
+        "subnet_size": 20
+      },
+      "app:http-80:188.114.96.0/20": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "188.114.96.0",
+        "subnet_size": 20
+      },
+      "app:http-80:190.93.240.0/20": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "190.93.240.0",
+        "subnet_size": 20
+      },
+      "app:http-80:197.234.240.0/22": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "197.234.240.0",
+        "subnet_size": 22
+      },
+      "app:http-80:198.41.128.0/17": {
+        "ip_type": "v4",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "198.41.128.0",
+        "subnet_size": 17
+      },
+      "app:http-80:2400:cb00::/32": {
+        "ip_type": "v6",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2400:cb00::",
+        "subnet_size": 32
+      },
+      "app:http-80:2405:8100::/32": {
+        "ip_type": "v6",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2405:8100::",
+        "subnet_size": 32
+      },
+      "app:http-80:2405:b500::/32": {
+        "ip_type": "v6",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2405:b500::",
+        "subnet_size": 32
+      },
+      "app:http-80:2606:4700::/32": {
+        "ip_type": "v6",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2606:4700::",
+        "subnet_size": 32
+      },
+      "app:http-80:2803:f800::/32": {
+        "ip_type": "v6",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2803:f800::",
+        "subnet_size": 32
+      },
+      "app:http-80:2a06:98c0::/29": {
+        "ip_type": "v6",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2a06:98c0::",
+        "subnet_size": 29
+      },
+      "app:http-80:2c0f:f248::/32": {
+        "ip_type": "v6",
+        "port": "80",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "2c0f:f248::",
+        "subnet_size": 32
+      },
+      "app:ssh:0.0.0.0/0": {
+        "ip_type": "v4",
+        "port": "22",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "0.0.0.0",
+        "subnet_size": 0
+      },
+      "app:ssh:::/0": {
+        "ip_type": "v6",
+        "port": "22",
+        "protocol": "tcp",
+        "role": "app",
+        "subnet": "::",
+        "subnet_size": 0
+      },
+      "clickhouse:app-8123:peer:app-0": {
+        "ip_type": "v4",
+        "port": "8123",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.15",
+        "subnet_size": 32
+      },
+      "clickhouse:app-9000:peer:app-0": {
+        "ip_type": "v4",
+        "port": "9000",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.15",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9000:peer:clickhouse-0": {
+        "ip_type": "v4",
+        "port": "9000",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.12",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9000:peer:clickhouse-1": {
+        "ip_type": "v4",
+        "port": "9000",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.13",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9000:peer:clickhouse-2": {
+        "ip_type": "v4",
+        "port": "9000",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.14",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9009:peer:clickhouse-0": {
+        "ip_type": "v4",
+        "port": "9009",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.12",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9009:peer:clickhouse-1": {
+        "ip_type": "v4",
+        "port": "9009",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.13",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9009:peer:clickhouse-2": {
+        "ip_type": "v4",
+        "port": "9009",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.14",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9181:peer:clickhouse-0": {
+        "ip_type": "v4",
+        "port": "9181",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.12",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9181:peer:clickhouse-1": {
+        "ip_type": "v4",
+        "port": "9181",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.13",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9181:peer:clickhouse-2": {
+        "ip_type": "v4",
+        "port": "9181",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.14",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9234:peer:clickhouse-0": {
+        "ip_type": "v4",
+        "port": "9234",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.12",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9234:peer:clickhouse-1": {
+        "ip_type": "v4",
+        "port": "9234",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.13",
+        "subnet_size": 32
+      },
+      "clickhouse:replica-9234:peer:clickhouse-2": {
+        "ip_type": "v4",
+        "port": "9234",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "10.50.0.14",
+        "subnet_size": 32
+      },
+      "clickhouse:ssh:0.0.0.0/0": {
+        "ip_type": "v4",
+        "port": "22",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "0.0.0.0",
+        "subnet_size": 0
+      },
+      "clickhouse:ssh:::/0": {
+        "ip_type": "v6",
+        "port": "22",
+        "protocol": "tcp",
+        "role": "clickhouse",
+        "subnet": "::",
+        "subnet_size": 0
+      },
+      "neon:postgres:peer:app-0": {
+        "ip_type": "v4",
+        "port": "55433",
+        "protocol": "tcp",
+        "role": "neon",
+        "subnet": "10.50.0.15",
+        "subnet_size": 32
+      },
+      "neon:ssh:0.0.0.0/0": {
+        "ip_type": "v4",
+        "port": "22",
+        "protocol": "tcp",
+        "role": "neon",
+        "subnet": "0.0.0.0",
+        "subnet_size": 0
+      },
+      "neon:ssh:::/0": {
+        "ip_type": "v6",
+        "port": "22",
+        "protocol": "tcp",
+        "role": "neon",
+        "subnet": "::",
+        "subnet_size": 0
+      },
+      "redis:redis:peer:app-0": {
+        "ip_type": "v4",
+        "port": "6379",
+        "protocol": "tcp",
+        "role": "redis",
+        "subnet": "10.50.0.15",
+        "subnet_size": 32
+      },
+      "redis:ssh:0.0.0.0/0": {
+        "ip_type": "v4",
+        "port": "22",
+        "protocol": "tcp",
+        "role": "redis",
+        "subnet": "0.0.0.0",
+        "subnet_size": 0
+      },
+      "redis:ssh:::/0": {
+        "ip_type": "v6",
+        "port": "22",
+        "protocol": "tcp",
+        "role": "redis",
+        "subnet": "::",
+        "subnet_size": 0
+      }
+    }
+  },
+  "output": {
+    "params": {
+      "value": {
+        "network_cidr": "${vultr_vpc.network.v4_subnet}/${vultr_vpc.network.v4_subnet_mask}",
+        "provider": "vultr",
+        "role_firewall_ids": "${ { for role, firewall in vultr_firewall_group.role : role => firewall.id } }",
+        "vpc_id": "${vultr_vpc.network.id}",
+        "vpc_ip_range": "10.50.0.0/24"
+      }
+    }
+  },
+  "provider": {
+    "vultr": {}
+  },
+  "resource": {
+    "vultr_firewall_group": {
+      "role": {
+        "description": "${each.value}",
+        "for_each": {
+          "app": "langfuse-fixture-app-firewall",
+          "clickhouse": "langfuse-fixture-clickhouse-firewall",
+          "neon": "langfuse-fixture-neon-firewall",
+          "redis": "langfuse-fixture-redis-firewall"
+        },
+        "lifecycle": {
+          "prevent_destroy": true
+        }
+      }
+    },
+    "vultr_firewall_rule": {
+      "ingress": {
+        "firewall_group_id": "${vultr_firewall_group.role[each.value.role].id}",
+        "for_each": "${local.ingress}",
+        "ip_type": "${each.value.ip_type}",
+        "port": "${each.value.port}",
+        "protocol": "${each.value.protocol}",
+        "subnet": "${each.value.subnet}",
+        "subnet_size": "${each.value.subnet_size}"
+      }
+    },
+    "vultr_vpc": {
+      "network": {
+        "description": "langfuse-fixture",
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "region": "ams",
+        "v4_subnet": "10.50.0.0",
+        "v4_subnet_mask": 24
+      }
+    }
+  },
+  "terraform": {
+    "required_providers": {
+      "vultr": {
+        "source": "vultr/vultr",
+        "version": "2.32.0"
+      }
+    }
+  }
+}

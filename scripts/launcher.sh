@@ -32,7 +32,7 @@ mkdir "$tmp/project"
 cp "$launcher" "$tmp/project/green"; chmod +x "$tmp/project/green"
 sed "s#WORKDIR#.colors#" "$root/test/fixtures/colors.yml" > "$tmp/project/colors.yml"
 (cd "$tmp/project" && LANGFUSE_LIB_ROOT="$root" ./green build >/dev/null) || fail 'LANGFUSE_LIB_ROOT build failed'
-[ -f "$tmp/project/.colors/langfuse-fixture/langfuse-infrastructure/main.tf" ] || fail 'copied payload rendered nothing'
+[ -f "$tmp/project/.colors/langfuse-fixture/compute/shared/shared-roles.tf.json" ] || fail 'copied payload rendered nothing'
 [ -f "$tmp/project/.colors/langfuse-fixture/langfuse-dns/main.tf" ] || fail 'no dns stage'
 [ -f "$tmp/project/.colors/langfuse-fixture/langfuse-ansible/site.yml" ] || fail 'no ansible stage'
 [ -f "$tmp/project/.colors/langfuse-fixture/langfuse-ansible/neon/compose.yml" ] || fail 'the neon bundle did not render from the dependency'
@@ -111,3 +111,9 @@ ok 'the ONCE pin agrees in green, red, blue, and the red and blue payloads'
 [ -L "$root/blue/blue" ] && [ "$(readlink "$root/blue/blue")" = ../skills/package-langfuse-blue/blue ] || fail 'blue/blue is not the payload symlink'
 ok 'red and blue colour launchers are the payload symlinks'
 echo "launcher: $checks checks passed"
+
+compute_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dependencies"]["colors-compute-red"].split("#")[1])' "$root/red/package.json")
+for path in "$root/green/deps.edn" "$root/blue/pyproject.toml" "$root/package.json" "$blue_launcher"; do
+  grep -q "$compute_sha" "$path" || fail "compute library pin differs: $path"
+done
+ok 'compute library pin agrees across all colours and payloads'

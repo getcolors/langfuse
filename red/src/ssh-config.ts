@@ -16,7 +16,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Opts } from "red/workflow";
-import { computeCluster } from "package-once-red";
+import {expand} from "colors-compute-red";
 import * as topology from "./topology.ts";
 
 // The profile, unchanged. Standard §2: the profile already keys remote state,
@@ -39,19 +39,8 @@ export function identityFile(opts: Opts): string {
 // Six machines are operable only if each can be reached by name; the bare
 // profile keeps `ssh <profile>` meaning what it means in every other
 // deployment.
-export function aliases(opts: Opts): string[] {
-  return computeCluster.aliases(topology.spec, opts);
-}
-
-// The alias for one machine: its entry in ONCE's list, paired with the host by
-// id. Derived from the profile, not from the machine's label, so an operator
-// who set `vultr-name` still reaches every machine as `<profile>-<role>[-<i>]`.
-export function machineAlias(opts: Opts, host: topology.Host): string {
-  const [, ...perNode] = aliases(opts);
-  const ids = computeCluster.nodeIds(topology.spec, opts);
-  const position = ids.findIndex((id) => id.role === host.role && id.index === (host.index ?? 0));
-  return perNode[position] ?? "";
-}
+export function aliases(opts:Opts):string[]{return [hostAlias(opts),...expand(topology.topology(opts)).map(n=>hostAlias(opts)+'-'+n.node_id)];}
+export function machineAlias(opts:Opts,host:topology.Host):string{return hostAlias(opts)+'-'+host.node_id;}
 
 export function configPath(): string {
   return join(process.env.HOME ?? homedir(), ".ssh", "config");

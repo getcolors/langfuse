@@ -6,7 +6,9 @@ import * as tofu from "red/tofu";
 import { runtime, type ExecResult } from "red/runtime";
 import type { Opts } from "red/workflow";
 import { failed } from "red/workflow";
-import { compute, computeCluster } from "package-once-red";
+import {orchestrate,plan_deployment,source_cidrs} from "colors-compute-red";
+import {mkdirSync,writeFileSync} from "node:fs";
+import {join} from "node:path";
 import { neonResource } from "./neon.ts";
 import * as sshConfig from "./ssh-config.ts";
 import * as topology from "./topology.ts";
@@ -45,7 +47,6 @@ import ansibleNeonMonitorSh from "../resources/tools/ansible/neon-monitor.sh" wi
 import ansibleRehearsalYml from "../resources/tools/ansible/rehearsal.yml" with { type: "text" };
 import ansibleCleanupYml from "../resources/tools/ansible/cleanup.yml" with { type: "text" };
 import dnsMainTf from "../resources/tools/dns/main.tf" with { type: "text" };
-import infrastructureMainTf from "../resources/tools/infrastructure/main.tf" with { type: "text" };
 
 export const infrastructureTool = "langfuse-infrastructure";
 export const dnsTool = "langfuse-dns";
@@ -74,7 +75,7 @@ const rawSpec = (target: string, content: string): Spec => contentSpec(target, c
 
 // A source list as desired state or an overlay string carries it. ONCE's, so
 // the validator and the templates can never disagree about what an entry is.
-export const cidrs = compute.cidrs;
+export const cidrs=(opts:Opts,key:string):string[]=>typeof opts[key]==='string'?opts[key].trim().split(/[\s,]+/).filter(Boolean):opts[key]??[];
 
 export function credentialEnv(opts: Opts, ...slots: string[]): Record<string, string> | undefined {
   const mapping: Record<string, string> = Object.assign(
@@ -134,14 +135,8 @@ export function hosts(opts: Opts): topology.Host[] {
 // `vultr-http-sources` is the symbolic value `cloudflare` and the live fetch is
 // unavailable — a `build` on a fresh checkout with no network must still
 // render. A real converge prefers the fetch and never silently widens.
-export const cloudflareRangesFallback = [
-  "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
-  "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
-  "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
-  "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
-  "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
-  "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
-];
+export {cloudflareRangesFallback} from './cloudflare-ranges.ts';
+import {cloudflareRangesFallback} from './cloudflare-ranges.ts';
 
 export const USER_AGENT = "colors-langfuse";
 
@@ -182,14 +177,11 @@ export interface HttpSources {
 // The origin ingress list. `cloudflare` is a symbolic source this package
 // RESOLVES; the result carries how it was obtained so the caller can record a
 // checksum and a real converge can refuse a stale fallback.
-export async function httpSources(opts: Opts): Promise<HttpSources> {
-  if (validate.s(opts["vultr-http-sources"]) !== "cloudflare") {
-    return { source: "explicit", ranges: cidrs(opts, "vultr-http-sources") };
-  }
-  const live = await fetchCloudflareRanges();
-  return live
-    ? { source: "fetched", ranges: live }
-    : { source: "fallback", ranges: cloudflareRangesFallback };
+export async function httpSources(opts:Opts):Promise<HttpSources>{
+ const sources=source_cidrs(opts,'http-sources','langfuse-http-sources');
+ if(sources.length!==1||sources[0]!=='cloudflare')return {source:'explicit',ranges:sources};
+ if(opts['red/event']==='build'||opts['red/dry-run'])return {source:'fallback',ranges:cloudflareRangesFallback};
+ const live=await fetchCloudflareRanges();return live?{source:'fetched',ranges:live}:{source:'fallback',ranges:cloudflareRangesFallback};
 }
 
 export function rangesChecksum(values: string[]): string {
@@ -197,60 +189,24 @@ export function rangesChecksum(values: string[]): string {
     .digest("hex").slice(0, 16);
 }
 
-export async function infrastructureData(opts: Opts): Promise<Opts> {
-  const { source, ranges } = await httpSources(opts);
-  return {
-    ...opts,
-    "compute-name": validate.computeName(opts),
-    "ssh-keygen": validate.keygen(opts),
-    "ssh-sources-hcl": tofu.hclList(cidrs(opts, "vultr-ssh-sources")),
-    "http-sources-hcl": tofu.hclList(ranges),
-    "http-sources-origin": source,
-    "http-sources-ranges": [...ranges],
-    "http-sources-checksum": rangesChecksum(ranges),
-    "clickhouse-node-count": topology.clickhouseNodeCount,
-    // Rendered into the firewall: a template key that is absent renders as
-    // empty rather than failing, and `port = ""` survives build, golden and
-    // dry-run to be rejected only by the provider.
-    "neon-compute-port": topology.neonComputePort,
-    "redis-port-value": topology.redisPort(opts),
-    "app-clickhouse-ports-hcl": tofu.hclList(topology.appClickhousePorts(opts).map(String)),
-    "clickhouse-internal-ports-hcl": tofu.hclList(topology.clickhouseInternalPorts(opts).map(String)),
-  };
+export async function infrastructureStep(opts:Opts,deps:any={}):Promise<Opts>{
+ const resolved=await (deps.httpSources??httpSources)(opts);
+ if(opts['red/event']==='create'&&!opts['red/dry-run']&&resolved.source==='fallback')return {...opts,'red/exit':1,'red/err':'Cloudflare ingress ranges unavailable; refusing stale fallback'};
+ try{
+  const req=topology.requirements(opts,resolved.ranges),planning=opts['red/event']==='build'||opts['red/dry-run'];
+  const result:any=planning?plan_deployment(opts,topology.topology(opts),req):await (deps.orchestrate??orchestrate)(opts,topology.topology(opts),req);
+  if(planning){const root=join(opts.workdir,opts.profile,'compute');
+   const stages:any[]=[['shared',result.documents.shared],...Object.entries(result.documents.nodes).map(([id,docs])=>['nodes/'+id,docs])];
+   const sorted=(v:any):any=>Array.isArray(v)?v.map(sorted):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
+   for(const [stage,documents] of stages){mkdirSync(join(root,stage),{recursive:true});for(const [name,document] of Object.entries(documents))writeFileSync(join(root,stage,name),JSON.stringify(sorted(document),null,2)+'\n');}
+   writeFileSync(join(root,'http-sources.json'),pretty({origin:resolved.source,checksum:rangesChecksum(resolved.ranges),ranges:resolved.ranges}));
+  }
+  if(!['planned','ready','destroyed'].includes(result.status))return {...opts,'red/exit':1,'red/err':result.errors?.join('\n')||'compute lifecycle refused'};
+  const output:Opts={...opts,'red/exit':0};if(result.cluster){output['colors-compute/cluster']=result.cluster;output['colors-compute/shared']=result.shared??{};}
+  const path=result.key?.private_key_path;if(path)output['ssh-private-key-path']=planning?path.replace('$HOME','/home/build-placeholder'):path;
+  return output;
+ }catch{return {...opts,'red/exit':1,'red/err':'invalid compute deployment requirements'};}
 }
-
-// The applied compute stage's `params`, adopted under `once/cluster` for the
-// stages that follow — or ONCE's refusal: no `params` output at all, or a
-// machine set that is partial, undeclared, duplicated or incomplete, exits 1
-// rather than rendering a ClickHouse cluster config or an app environment
-// against the documentation addresses.
-export function resolvedCluster(opts: Opts, result: Opts): Opts {
-  return computeCluster.resolvedCluster(topology.spec, opts, result, {},
-    computeCluster.outputParams(result));
-}
-
-export async function infrastructureStep(opts: Opts): Promise<Opts> {
-  const dir = toolDir(opts, infrastructureTool);
-  const data = await infrastructureData(opts);
-  const specs = [
-    spec(template("infrastructure/main.tf", infrastructureMainTf), `${dir}/main.tf`, data),
-    // The resolved range set is recorded, with a checksum, so a firewall
-    // change is explainable after the fact.
-    rawSpec(`${dir}/http-sources.json`, pretty({
-      origin: data["http-sources-origin"],
-      checksum: data["http-sources-checksum"],
-      ranges: data["http-sources-ranges"],
-    })),
-  ];
-  const result = await tofu.tofuWithSpec(opts, specs,
-    { dir, env: credentialEnv(opts, "provider-compute") });
-  if (failed(result)) return result;
-  if (opts["red/event"] === "build") return result;
-  if (opts["red/event"] === "delete") return result;
-  return resolvedCluster(opts, result);
-}
-
-// ------------------------------------------------------------------- dns
 
 export const zoneId = "${data.cloudflare_zone.zone.id}";
 
@@ -288,7 +244,7 @@ export function ansibleLocalData(opts: Opts): Opts {
   return {
     ...opts,
     "ssh-keygen": validate.keygen(opts),
-    "ssh-config-identity-file": sshConfig.identityFile(opts),
+    "ssh-config-identity-file": validate.keygen(opts)?sshConfig.identityFile(opts):opts["ssh-private-key-path"]??"",
   };
 }
 
@@ -307,9 +263,7 @@ export function ansibleLocalSpecs(opts: Opts): Spec[] {
 // The stanzas the managed block carries: the bare profile reaching the app
 // host (the spec's entry), then one per machine. ONCE's (Compute Cluster
 // Standard §6).
-export function sshConfigHosts(opts: Opts, list: topology.Host[]): computeCluster.SshConfigHost[] {
-  return computeCluster.sshConfigHosts(topology.spec, opts, list as unknown as computeCluster.Node[]);
-}
+export function sshConfigHosts(opts:Opts,list:topology.Host[]){const app=topology.hostOf(list,'app')!;return [{name:sshConfig.hostAlias(opts),ip:app.ip,user:app.user},...list.map(h=>({name:sshConfig.machineAlias(opts,h),ip:h.ip,user:h.user}))];}
 
 // Write or remove the `~/.ssh/config` block. The same playbook serves both
 // events; `block_state` is what distinguishes them.
@@ -378,7 +332,6 @@ export function ansibleData(opts: Opts): Opts {
   return {
     ...opts,
     "ssh-keygen": validate.keygen(opts),
-    "compute-name": validate.computeName(opts),
     "neon-compute-port": topology.neonComputePort,
     "clickhouse-node-count": topology.clickhouseNodeCount,
   };
@@ -476,7 +429,7 @@ export function ansibleSpecs(opts: Opts): Spec[] {
 
 export async function ansibleStep(opts: Opts): Promise<Opts> {
   const dir = toolDir(opts, ansibleTool);
-  if (opts["red/event"] === "delete" && opts["once/cluster"] == null) {
+  if (opts["red/event"] === "delete" && opts["colors-compute/cluster"] == null) {
     // A readable state without compute: there is no host to stop, and the
     // cleanup play would only fail against the placeholder addresses. (An
     // unreadable state, or a partial one, never reaches here — the delete

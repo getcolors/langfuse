@@ -18,8 +18,10 @@ from blue.ansible import ansible_with_spec
 from blue.cli import stage_dir
 from blue.runtime import runtime
 from blue.scaffold import PRESERVE_JINJA_DELIMITERS, content_spec
-from package_once_blue import compute as once_compute
-from package_once_blue import compute_cluster as once_cluster
+from colors_compute.orchestration import orchestrate
+from colors_compute.planning import plan_deployment
+from colors_compute.deployment_request import source_cidrs
+from blue.scaffold import scaffold
 
 from . import ssh_config, topology, validate
 from .utils import clj_str as _s
@@ -63,7 +65,12 @@ def raw_spec(target: str, content: str) -> dict:
 
 # A source list as desired state or an overlay string carries it. ONCE's, so
 # the validator and the templates can never disagree about what an entry is.
-cidrs = once_compute.cidrs
+def cidrs(opts, key):
+    value = opts.get(key)
+    if isinstance(value, str):
+        import re
+        return [part for part in re.split(r'[\s,]+', value.strip()) if part]
+    return list(value or [])
 
 
 def credential_env(opts: dict, *slots: str) -> dict[str, str] | None:
@@ -146,7 +153,7 @@ def _pretty(value, indent: int = 0) -> str:
 
 def hosts(opts: dict) -> list[dict]:
     """The host list for every stage after compute: the recorded cluster
-    under `once/cluster` on a real run, ONCE's fallbacks on a build (see
+    under `colors-compute/cluster` on a real run, library plans on a build (see
     `topology.hosts`)."""
     return topology.hosts(opts)
 
@@ -193,16 +200,14 @@ def fetch_cloudflare_ranges() -> list[str] | None:
         return None
 
 
-def http_sources(opts: dict) -> dict:
-    """The origin ingress list. `cloudflare` is a symbolic source this package
-    RESOLVES; the result carries how it was obtained so the caller can record
-    a checksum and a real converge can refuse a stale fallback."""
-    if _s(opts.get("vultr-http-sources")) != "cloudflare":
-        return {"source": "explicit", "ranges": cidrs(opts, "vultr-http-sources")}
+def http_sources(opts):
+    sources = source_cidrs(opts, 'http-sources', 'langfuse-http-sources')
+    if sources != ['cloudflare']:
+        return {'source': 'explicit', 'ranges': sources}
+    if opts.get('blue/event') == 'build' or opts.get('blue/dry-run'):
+        return {'source': 'fallback', 'ranges': cloudflare_ranges_fallback}
     live = fetch_cloudflare_ranges()
-    if live:
-        return {"source": "fetched", "ranges": live}
-    return {"source": "fallback", "ranges": cloudflare_ranges_fallback}
+    return {'source': 'fetched', 'ranges': live} if live else {'source': 'fallback', 'ranges': cloudflare_ranges_fallback}
 
 
 def ranges_checksum(values: list[str]) -> str:
@@ -210,58 +215,37 @@ def ranges_checksum(values: list[str]) -> str:
     return digest[:16]
 
 
-def infrastructure_data(opts: dict) -> dict:
+async def infrastructure_step(opts):
     resolved = http_sources(opts)
-    ranges = list(resolved["ranges"])
-    return {**opts,
-            "compute-name": validate.compute_name(opts),
-            "ssh-keygen": validate.keygen(opts),
-            "ssh-sources-hcl": tofu.hcl_list(cidrs(opts, "vultr-ssh-sources")),
-            "http-sources-hcl": tofu.hcl_list(ranges),
-            "http-sources-origin": resolved["source"],
-            "http-sources-ranges": ranges,
-            "http-sources-checksum": ranges_checksum(ranges),
-            "clickhouse-node-count": topology.CLICKHOUSE_NODE_COUNT,
-            # Rendered into the firewall: a template key that is absent
-            # renders as empty rather than failing, and `port = ""` survives
-            # build, golden and dry-run to be rejected only by the provider.
-            "neon-compute-port": topology.NEON_COMPUTE_PORT,
-            "redis-port-value": topology.redis_port(opts),
-            "app-clickhouse-ports-hcl":
-                tofu.hcl_list([str(p) for p in topology.app_clickhouse_ports(opts)]),
-            "clickhouse-internal-ports-hcl":
-                tofu.hcl_list([str(p) for p in topology.clickhouse_internal_ports(opts)])}
-
-
-def resolved_cluster(opts: dict, result: dict) -> dict:
-    """The applied compute stage's `params`, adopted under `once/cluster` for
-    the stages that follow — or ONCE's refusal: no `params` output at all, or
-    a machine set that is partial, undeclared, duplicated or incomplete,
-    exits 1 rather than rendering a ClickHouse cluster config or an app
-    environment against the documentation addresses."""
-    return once_cluster.resolved_cluster(topology.spec, opts, result, {},
-                                         once_cluster.output_params(result))
-
-
-async def infrastructure_step(opts: dict) -> dict:
-    dir = tool_dir(opts, infrastructure_tool)
-    data = infrastructure_data(opts)
-    specs = [
-        spec(template("infrastructure", "main.tf"), f"{dir}/main.tf", data),
-        # The resolved range set is recorded, with a checksum, so a firewall
-        # change is explainable after the fact.
-        raw_spec(f"{dir}/http-sources.json",
-                 _pretty({"origin": data["http-sources-origin"],
-                          "checksum": data["http-sources-checksum"],
-                          "ranges": data["http-sources-ranges"]})),
-    ]
-    result = await tofu.tofu_with_spec(
-        opts, specs, dir=dir, env=credential_env(opts, "provider-compute"))
-    if (result.get("blue/exit") or 0) > 0:
-        return result
-    if opts.get("blue/event") in ("build", "delete"):
-        return result
-    return resolved_cluster(opts, result)
+    if opts.get('blue/event') == 'create' and not opts.get('blue/dry-run') and resolved['source'] == 'fallback':
+        return {**opts, 'blue/exit': 1, 'blue/err': 'Cloudflare ingress ranges unavailable; refusing stale fallback'}
+    requirements = topology.requirements(opts, resolved['ranges'])
+    try:
+        if opts.get('blue/event') == 'build' or opts.get('blue/dry-run'):
+            result = plan_deployment(opts, topology.topology(opts), requirements)
+            specs = []
+            root = Path(opts['workdir']) / opts['profile'] / 'compute'
+            for name, document in result['documents']['shared'].items():
+                specs.append(raw_spec(str(root / 'shared' / name), json.dumps(document, indent=2, sort_keys=True) + '\n'))
+            for node_id, documents in result['documents']['nodes'].items():
+                for name, document in documents.items():
+                    specs.append(raw_spec(str(root / 'nodes' / node_id / name), json.dumps(document, indent=2, sort_keys=True) + '\n'))
+            specs.append(raw_spec(str(root / 'http-sources.json'), _pretty({'origin': resolved['source'], 'checksum': ranges_checksum(resolved['ranges']), 'ranges': resolved['ranges']})))
+            scaffold(opts, specs)
+        else:
+            result = await orchestrate(opts, topology.topology(opts), requirements)
+        if result['status'] not in ('planned', 'ready', 'destroyed'):
+            return {**opts, 'blue/exit': 1, 'blue/err': '\n'.join(result.get('errors', [])) or 'compute lifecycle refused'}
+        output = {**opts, 'blue/exit': 0}
+        if 'cluster' in result:
+            output['colors-compute/cluster'] = result['cluster']
+            output['colors-compute/shared'] = result.get('shared', {})
+        path = result.get('key', {}).get('private_key_path')
+        if path:
+            output['ssh-private-key-path'] = path.replace('$HOME', '/home/build-placeholder') if result['status'] == 'planned' else path
+        return output
+    except (ValueError, KeyError):
+        return {**opts, 'blue/exit': 1, 'blue/err': 'invalid compute deployment requirements'}
 
 
 # ------------------------------------------------------------------- dns
@@ -305,7 +289,7 @@ def ansible_local_data(opts: dict) -> dict:
     IP and is identical on every workstation (SSH Config Standard §6)."""
     return {**opts,
             "ssh-keygen": validate.keygen(opts),
-            "ssh-config-identity-file": ssh_config.identity_file(opts)}
+            "ssh-config-identity-file": ssh_config.identity_file(opts) if validate.keygen(opts) else opts.get("ssh-private-key-path", "")}
 
 
 def ansible_local_specs(opts: dict) -> list[dict]:
@@ -318,11 +302,10 @@ def ansible_local_specs(opts: dict) -> list[dict]:
             spec(template("ansible-local", "main.yml"), f"{dir}/main.yml", data)]
 
 
-def ssh_config_hosts(opts: dict, hosts_: list[dict]) -> list[dict]:
-    """The stanzas the managed block carries: the bare profile reaching the
-    app host (the spec's entry), then one per machine. ONCE's (Compute
-    Cluster Standard §6)."""
-    return once_cluster.ssh_config_hosts(topology.spec, opts, hosts_)
+def ssh_config_hosts(opts, hosts_):
+    app = topology.host_of(hosts_, 'app')
+    return [{'name': ssh_config.host_alias(opts), 'ip': app['ip'], 'user': app['user']},
+            *[{'name': ssh_config.machine_alias(opts, h), 'ip': h['ip'], 'user': h['user']} for h in hosts_]]
 
 
 async def ansible_local_step(opts: dict) -> dict:
@@ -383,8 +366,7 @@ def ansible_data(opts: dict) -> dict:
     quotes and hand Ansible `&#39;`."""
     return {**opts,
             "ssh-keygen": validate.keygen(opts),
-            "compute-name": validate.compute_name(opts),
-            "neon-compute-port": topology.NEON_COMPUTE_PORT,
+                        "neon-compute-port": topology.NEON_COMPUTE_PORT,
             "clickhouse-node-count": topology.CLICKHOUSE_NODE_COUNT}
 
 
@@ -435,7 +417,7 @@ def ansible_specs(opts: dict) -> list[dict]:
 
 async def ansible_step(opts: dict) -> dict:
     dir = tool_dir(opts, ansible_tool)
-    if opts.get("blue/event") == "delete" and opts.get("once/cluster") is None:
+    if opts.get("blue/event") == "delete" and opts.get("colors-compute/cluster") is None:
         # A readable state without compute: there is no host to stop, and the
         # cleanup play would only fail against the placeholder addresses. (An
         # unreadable state, or a partial one, never reaches here — the delete

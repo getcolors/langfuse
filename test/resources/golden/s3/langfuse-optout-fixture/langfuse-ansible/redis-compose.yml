@@ -1,0 +1,25 @@
+# Redis 7.2 on the VPC address and loopback, nowhere else. The configuration
+# file carries the password; the healthcheck reads it from that file so no
+# credential sits in the container's environment or command line.
+name: redis
+services:
+  redis:
+    image: docker.io/library/redis:7.2.16@sha256:74566c6910d13ae61e7ce73ebd3127438a1fe805b309b097c323142719ec8a5b
+    restart: unless-stopped
+    command: ["redis-server", "/etc/redis/redis.conf"]
+    ports:
+      - "127.0.0.1:6379:6379"
+      - "{{ vpc_ip }}:6379:6379"
+    volumes:
+      - /opt/redis/redis.conf:/etc/redis/redis.conf:ro
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$(sed -n 's/^requirepass //p' /etc/redis/redis.conf)\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+volumes:
+  redis-data:

@@ -129,3 +129,10 @@ smoke gate reports the preflight as `WARN` until it is there.
 ## Configuration reference
 
 See [references/configuration.md](references/configuration.md).
+
+Compute uses the pinned colors-compute library. The package declares roles
+and security policy; the library owns shared and per-node OpenTofu state,
+managed key lifecycle and cloud credentials. Use R2 or S3 state. Builds
+render `compute/shared` and `compute/nodes/<node_id>`. Existing monolithic
+`<profile>/langfuse-infrastructure.tfstate` requires explicit migration;
+do not create over it or remove the refusal guard.

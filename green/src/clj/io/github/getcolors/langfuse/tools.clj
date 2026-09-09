@@ -1,6 +1,7 @@
 (ns io.github.getcolors.langfuse.tools
   (:require [cheshire.core :as json]
             [clojure.string :as str]
+            [clojure.java.io :as io]
             [green.ansible :as ansible]
             [green.cli :as green-cli]
             [green.process :as process]
@@ -10,8 +11,9 @@
             [io.github.getcolors.langfuse.ssh-config :as ssh-config]
             [io.github.getcolors.langfuse.topology :as topology]
             [io.github.getcolors.langfuse.validate :as validate]
-            [io.github.getcolors.once.compute :as compute]
-            [io.github.getcolors.once.compute-cluster :as once-cluster]))
+            [io.github.getcolors.compute-deployment-request :as deployment]
+            [io.github.getcolors.compute-planning :as planning]
+            [io.github.getcolors.compute-orchestration :as orchestration]))
 
 (def infrastructure-tool "langfuse-infrastructure")
 (def dns-tool "langfuse-dns")
@@ -33,11 +35,6 @@
 (defn spec [source target data] {:template source :target target :data data :opts template-opts})
 (defn raw-spec [target content] (sc/content-spec target content))
 
-(def cidrs
-  "A source list as desired state or an overlay string carries it. ONCE's, so
-  the validator and the templates can never disagree about what an entry is."
-  compute/cidrs)
-
 (defn credential-env [opts & slots]
   (not-empty
    (into {} (keep (fn [[k env-var]]
@@ -48,9 +45,7 @@
 ;; ------------------------------------------------------------- compute output
 
 (defn hosts
-  "The host list for every stage after compute: the recorded cluster under
-  `:once/cluster` on a real run, ONCE's fallbacks on a build (see
-  `topology/hosts`)."
+  "Host facts from the validated library join, with offline planning for build."
   [opts]
   (topology/hosts opts))
 
@@ -79,73 +74,49 @@
       (when (seq xs) (vec xs)))
     (catch Exception _ nil)))
 
-(defn http-sources
-  "The origin ingress list. `cloudflare` is a symbolic source this package
-  RESOLVES; the result carries how it was obtained so the caller can record a
-  checksum and a real converge can refuse a stale fallback."
-  [opts]
-  (let [v (:vultr-http-sources opts)]
-    (if-not (= "cloudflare" (str v))
-      {:source :explicit :ranges (cidrs opts :vultr-http-sources)}
-      (if-let [live (fetch-cloudflare-ranges)]
-        {:source :fetched :ranges live}
-        {:source :fallback :ranges cloudflare-ranges-fallback}))))
+(defn http-sources [opts]
+  (let [sources (deployment/source-cidrs opts "http-sources" "langfuse-http-sources")]
+    (cond (not= sources ["cloudflare"]) {:source :explicit :ranges sources}
+          (or (= :build (:green/event opts)) (:green/dry-run opts)) {:source :fallback :ranges cloudflare-ranges-fallback}
+          :else (if-let [live (fetch-cloudflare-ranges)] {:source :fetched :ranges live} {:source :fallback :ranges cloudflare-ranges-fallback}))))
 
 (defn ranges-checksum [xs]
   (let [d (java.security.MessageDigest/getInstance "SHA-256")]
     (->> (str/join "\n" (sort xs)) .getBytes (.digest d)
          (map #(format "%02x" %)) str/join (take 16) str/join)))
 
-(defn infrastructure-data [opts]
-  (let [{:keys [source ranges]} (http-sources opts)]
-    (assoc opts
-           :compute-name (validate/compute-name opts)
-           :ssh-keygen (validate/keygen? opts)
-           :ssh-sources-hcl (tofu/hcl-list (cidrs opts :vultr-ssh-sources))
-           :http-sources-hcl (tofu/hcl-list ranges)
-           :http-sources-origin (name source)
-           :http-sources-ranges (vec ranges)
-           :http-sources-checksum (ranges-checksum ranges)
-           :clickhouse-node-count topology/clickhouse-node-count
-           ;; Rendered into the firewall: a Selmer key that is absent renders
-           ;; as empty rather than failing, and `port = ""` survives build,
-           ;; golden and dry-run to be rejected only by the provider.
-           :neon-compute-port topology/neon-compute-port
-           :redis-port-value (topology/redis-port opts)
-           :app-clickhouse-ports-hcl (tofu/hcl-list (map str (topology/app-clickhouse-ports opts)))
-           :clickhouse-internal-ports-hcl (tofu/hcl-list (map str (topology/clickhouse-internal-ports opts))))))
-
-(defn resolved-cluster
-  "The applied compute stage's `params`, adopted under `:once/cluster` for
-  the stages that follow — or ONCE's refusal: no `params` output at all, or
-  a machine set that is partial, undeclared, duplicated or incomplete, exits
-  1 rather than rendering a ClickHouse cluster config or an app environment
-  against the documentation addresses."
-  [opts result]
-  (once-cluster/resolved-cluster topology/spec opts result {}
-                                 (once-cluster/output-params result)))
+(defn- compute-json [value indent]
+  (let [padding #(apply str (repeat % " "))]
+    (cond
+      (map? value) (if (empty? value) "{}"
+                      (str "{\n" (str/join ",\n" (for [[key item] (sort-by key value)]
+                                                       (str (padding (+ indent 2)) (json/generate-string key) ": " (compute-json item (+ indent 2)))))
+                           "\n" (padding indent) "}"))
+      (sequential? value) (if (empty? value) "[]"
+                              (str "[\n" (str/join ",\n" (map #(str (padding (+ indent 2)) (compute-json % (+ indent 2))) value)) "\n" (padding indent) "]"))
+      :else (json/generate-string value))))
 
 (defn infrastructure-step [opts]
-  (let [dir (tool-dir opts infrastructure-tool)
-        data (infrastructure-data opts)
-        specs [(spec (template "infrastructure" "main.tf") (str dir "/main.tf") data)
-               ;; The resolved range set is recorded, with a checksum, so a
-               ;; firewall change is explainable after the fact.
-               (raw-spec (str dir "/http-sources.json")
-                         (json/generate-string
-                          {:origin (:http-sources-origin data)
-                           :checksum (:http-sources-checksum data)
-                           :ranges (:http-sources-ranges data)}
-                          {:pretty true}))]
-        result (tofu/tofu-with-spec opts specs
-                                    {:dir dir :env (credential-env opts :provider-compute)})]
-    (cond
-      (wf/failed? result) result
-      (= :build (:green/event opts)) result
-      (= :delete (:green/event opts)) result
-      :else (resolved-cluster opts result))))
-
-;; ------------------------------------------------------------------- dns
+  (let [{:keys [source ranges]} (http-sources opts)]
+    (if (and (= :create (:green/event opts)) (not (:green/dry-run opts)) (= source :fallback))
+      (assoc opts :green/exit 1 :green/err "Cloudflare ingress ranges unavailable; refusing stale fallback")
+      (try
+        (let [requirements (topology/requirements opts ranges)
+              planning? (or (= :build (:green/event opts)) (:green/dry-run opts))
+              result (if planning? (planning/plan-deployment opts (topology/topology opts) requirements)
+                         (orchestration/orchestrate opts (topology/topology opts) requirements))]
+          (when planning?
+            (let [root (str (:workdir opts) "/" (:profile opts) "/compute")
+                  stages (cons ["shared" (get-in result [:documents :shared])] (map (fn [[id docs]] [(str "nodes/" id) docs]) (get-in result [:documents :nodes])))]
+              (doseq [[stage docs] stages [filename document] docs]
+                (let [file (io/file root stage filename)] (io/make-parents file) (spit file (str (compute-json document 0) "\n"))))
+              (spit (io/file root "http-sources.json") (json/generate-string {:origin (name source) :checksum (ranges-checksum ranges) :ranges ranges} {:pretty true}))))
+          (if-not (contains? #{"planned" "ready" "destroyed"} (:status result))
+            (assoc opts :green/exit 1 :green/err "compute lifecycle refused; legacy monolithic state requires explicit migration")
+            (cond-> (assoc opts :green/exit 0)
+              (:cluster result) (assoc :colors-compute/cluster (:cluster result) :colors-compute/shared (:shared result))
+              (get-in result [:key :private_key_path]) (assoc :ssh-private-key-path (if planning? (str/replace (get-in result [:key :private_key_path]) "$HOME" "/home/build-placeholder") (get-in result [:key :private_key_path]))))))
+        (catch Exception _ (assoc opts :green/exit 1 :green/err "invalid compute deployment requirements"))))))
 
 (defn zone-id [] "${data.cloudflare_zone.zone.id}")
 
@@ -178,7 +149,7 @@
   [opts]
   (assoc opts
          :ssh-keygen (validate/keygen? opts)
-         :ssh-config-identity-file (ssh-config/identity-file opts)))
+         :ssh-config-identity-file (if (validate/keygen? opts) (ssh-config/identity-file opts) (get opts :ssh-private-key-path ""))))
 
 (defn ansible-local-specs [opts]
   (let [dir (tool-dir opts ansible-local-tool) data (ansible-local-data opts)]
@@ -193,7 +164,7 @@
   host (the spec's entry), then one per machine. ONCE's (Compute Cluster
   Standard §6)."
   [opts hosts*]
-  (once-cluster/ssh-config-hosts topology/spec opts hosts*))
+  (into [(assoc (topology/host-of hosts* :app) :name (:profile opts))] (map #(assoc % :name (ssh-config/machine-alias opts %)) hosts*)))
 
 (defn ansible-local-step
   "Write or remove the `~/.ssh/config` block. The same playbook serves both
@@ -255,7 +226,6 @@
   [opts]
   (assoc opts
          :ssh-keygen (validate/keygen? opts)
-         :compute-name (validate/compute-name opts)
          :neon-compute-port topology/neon-compute-port
          :clickhouse-node-count topology/clickhouse-node-count))
 
@@ -302,7 +272,7 @@
 
 (defn ansible-step [opts]
   (let [dir (tool-dir opts ansible-tool)]
-    (if (and (= :delete (:green/event opts)) (nil? (:once/cluster opts)))
+    (if (and (= :delete (:green/event opts)) (nil? (:colors-compute/cluster opts)))
       ;; A readable state without compute: there is no host to stop, and the
       ;; cleanup play would only fail against the placeholder addresses. (An
       ;; unreadable state, or a partial one, never reaches here — the delete

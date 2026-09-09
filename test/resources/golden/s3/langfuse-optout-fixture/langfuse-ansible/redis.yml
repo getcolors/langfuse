@@ -1,0 +1,144 @@
+# Redis on its own host: the queue and cache Langfuse ingests through.
+#
+# Langfuse requires >= 7 with maxmemory-policy noeviction -- a queued job that
+# is evicted is an event that is silently never processed -- and recommends
+# 7.2 for v4. Append-only persistence on a named volume keeps queued jobs
+# across a restart; a LOSS of this host is stated honestly in the README
+# rather than papered over with a replay that Langfuse does not document.
+- name: Install Redis
+  hosts: redis
+  become: true
+  gather_facts: false
+  handlers:
+    - name: Bring up redis
+      ansible.builtin.command: docker compose up -d
+      args: {chdir: /opt/redis}
+    - name: Reload systemd
+      ansible.builtin.systemd_service: {daemon_reload: true}
+  tasks:
+    - name: Install Docker
+      ansible.builtin.apt:
+        name: [docker.io, docker-compose-v2]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - ansible.builtin.systemd_service: {name: docker, enabled: true, state: started}
+    - ansible.builtin.file: {path: "{{ item.path }}", state: directory, mode: "{{ item.mode }}"}
+      loop:
+        - {path: /opt/redis, mode: "0755"}
+        - {path: /etc/redis, mode: "0755"}
+        - {path: /etc/redis/secrets, mode: "0700"}
+        - {path: /opt/colors, mode: "0755"}
+
+    - name: Generate the Redis password once, on this host only
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        openssl rand -hex 24 > /etc/redis/secrets/password
+      args: {creates: /etc/redis/secrets/password, executable: /bin/bash}
+
+    # The configuration carries the password so that neither the command
+    # line nor the container environment does. Readable by the container's
+    # redis user (uid 999) and nobody else.
+    - name: Render the Redis configuration
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        pw=$(cat /etc/redis/secrets/password)
+        [ -n "$pw" ] || { echo "empty redis password" >&2; exit 1; }
+        {
+          printf 'requirepass %s\n' "$pw"
+          printf 'maxmemory-policy noeviction\n'
+          printf 'appendonly yes\n'
+          printf 'appendfsync everysec\n'
+          printf 'bind 0.0.0.0\n'
+          printf 'protected-mode yes\n'
+        } > /opt/redis/redis.conf.next
+        chown 999:999 /opt/redis/redis.conf.next
+        chmod 0400 /opt/redis/redis.conf.next
+        if cmp -s /opt/redis/redis.conf.next /opt/redis/redis.conf 2>/dev/null; then
+          rm -f /opt/redis/redis.conf.next; echo unchanged
+        else
+          mv /opt/redis/redis.conf.next /opt/redis/redis.conf; echo updated
+        fi
+      args: {executable: /bin/bash}
+      register: redis_conf
+      changed_when: "'updated' in redis_conf.stdout"
+      notify: Bring up redis
+
+    - name: Install the Compose file
+      ansible.builtin.template: {src: redis-compose.yml, dest: /opt/redis/compose.yml, mode: "0644"}
+      notify: Bring up redis
+
+    - name: Install the monitor
+      ansible.builtin.copy: {src: "{{ item.src }}", dest: "{{ item.dest }}", mode: "0755"}
+      loop:
+        - {src: r2-env.sh, dest: /opt/colors/r2-env.sh}
+        - {src: redis-monitor.sh, dest: /usr/local/sbin/redis-monitor}
+
+    - ansible.builtin.meta: flush_handlers
+
+    - name: Enforce the running state
+      ansible.builtin.command: docker compose up -d
+      args: {chdir: /opt/redis}
+      register: redis_up
+      changed_when: "'Started' in redis_up.stderr or 'Recreated' in redis_up.stderr"
+
+    - name: Wait for Redis
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd /opt/redis
+        docker compose exec -T redis redis-cli --no-auth-warning -a "$(cat /etc/redis/secrets/password)" PING | grep -q PONG
+      args: {executable: /bin/bash}
+      register: redis_ping
+      changed_when: false
+      retries: 30
+      delay: 2
+      until: redis_ping.rc == 0
+
+    # --- gates -----------------------------------------------------------------
+    - name: Redis is configured the way Langfuse requires
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd /opt/redis
+        pw=$(cat /etc/redis/secrets/password)
+        r() { docker compose exec -T redis redis-cli --no-auth-warning -a "$pw" "$@"; }
+        [ "$(r CONFIG GET maxmemory-policy | tail -1 | tr -d '\r')" = "noeviction" ] || { echo "maxmemory-policy is not noeviction" >&2; exit 1; }
+        [ "$(r CONFIG GET appendonly | tail -1 | tr -d '\r')" = "yes" ] || { echo "appendonly is not yes" >&2; exit 1; }
+        r INFO persistence | grep -q '^aof_enabled:1' || { echo "aof_enabled is not 1" >&2; exit 1; }
+        r INFO server | grep -qE '^redis_version:7\.' || { echo "redis is not 7.x" >&2; exit 1; }
+        # The negative: an unauthenticated PING must be refused.
+        if docker compose exec -T redis redis-cli PING 2>/dev/null | grep -q PONG; then
+          echo "an unauthenticated PING was accepted" >&2; exit 1
+        fi
+      args: {executable: /bin/bash}
+      changed_when: false
+
+    - name: Install the monitor timer
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: redis-monitor.service
+          content: |
+            [Unit]
+            Description=Redis health check
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/redis-monitor
+        - name: redis-monitor.timer
+          content: |
+            [Unit]
+            Description=Redis health check
+            [Timer]
+            OnCalendar=*:0/15
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+      notify: Reload systemd
+    - ansible.builtin.systemd_service: {name: redis-monitor.timer, enabled: true, state: started, daemon_reload: true}
+    - name: Run the monitor once so describe has a result
+      ansible.builtin.command: /usr/local/sbin/redis-monitor
+      changed_when: false
+      failed_when: false

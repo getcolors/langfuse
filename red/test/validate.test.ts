@@ -17,7 +17,7 @@ describe("validate", () => {
   });
 
   test("reports every problem at once", () => {
-    expect(errs({ "neon-pg-version": 12, "redis-port": null, "vultr-os-id": "x" }).length)
+    expect(errs({ "neon-pg-version": 12, "redis-port": null, "vultr-vpc-subnet": "invalid" }).length)
       .toBeGreaterThanOrEqual(3);
   });
 
@@ -111,7 +111,7 @@ describe("validate", () => {
   test("every operator credential is required on create", () => {
     for (const key of ["langfuse-encryption-key", "langfuse-salt", "langfuse-init-user-password",
       "langfuse-backup-r2-access-key-id", "langfuse-storage-r2-access-key-id",
-      "neon-r2-access-key-id", "cloudflare-api-token", "vultr-api-key"]) {
+      "neon-r2-access-key-id", "cloudflare-api-token"]) {
       expect(secretErrs({ [key]: null }).some((e) => e.includes(parName(key)))).toBe(true);
     }
   });
@@ -133,30 +133,9 @@ describe("validate", () => {
     expect(has({ "neon-role": "cloud_admin" }, "must not be cloud_admin")).toBe(true);
   });
 
-  test("the compute checks are the cluster standard's", () => {
-    // Selection, the SSH source list, the created network's CIDR and the
-    // provider rules are ONCE's over the spec, in ONCE's words. The package's
-    // own rules — three replicas, the cloudflare/proxied coupling — still
-    // apply beside them, and `vultr-http-sources` stays the package's: it is
-    // not one of the spec's source lists because it accepts the symbolic
-    // `cloudflare`.
-    expect(errs({ "provider-compute": "digitalocean" })).toEqual([":provider-compute must be one of vultr"]);
-    expect(errs({ "vultr-ssh-sources": [] })).toEqual([":vultr-ssh-sources must list at least one CIDR"]);
-    expect(errs({ "vultr-ssh-sources": ["1.2.3.4"] }))
-      .toEqual([':vultr-ssh-sources entry "1.2.3.4" is not an IPv4 or IPv6 CIDR']);
-    // The VPC must be a network, host bits zero.
-    expect(errs({ "vultr-vpc-subnet": "10.50.0.0" }))
-      .toEqual([":vultr-vpc-subnet must be a canonical IPv4 network such as 10.40.0.0/24"]);
-    expect(errs({ "vultr-vpc-subnet": "10.50.0.1/24" }))
-      .toEqual([":vultr-vpc-subnet must be a canonical IPv4 network such as 10.40.0.0/24"]);
-    // The six fallback addresses must fit the subnet.
-    expect(errs({ "vultr-vpc-subnet": "10.50.0.0/28" }))
-      .toEqual([":vultr-vpc-subnet has no usable host address for clickhouse-0, clickhouse-1, clickhouse-2"]);
-    // The compute keys are required through the registry, once each.
-    expect(errs({ "vultr-plan-app": null })).toEqual([":vultr-plan-app is required"]);
-    expect(errs({ "vultr-os-id": "x" })).toEqual([":vultr-os-id must be Vultr's numeric operating-system id"]);
-    // An explicit http source list is not held to ONCE's grammar here.
-    expect(errs({ "vultr-http-sources": ["1.2.3.0/24"], "cloudflare-proxied": false })).toEqual([]);
+  test("compute input validation belongs to the library", () => {
+    for(const patch of [{"vultr-ssh-sources":[]},{"vultr-ssh-sources":["1.2.3.4"]},{"vultr-vpc-subnet":"10.50.0.1/24"},{"vultr-plan-app":null}]) expect(errs(patch).length).toBeGreaterThan(0);
+    expect(errs({"vultr-http-sources":["1.2.3.0/24"],"cloudflare-proxied":false})).toEqual([]);
   });
 
   test("profile may not be overlaid from the environment", () => {

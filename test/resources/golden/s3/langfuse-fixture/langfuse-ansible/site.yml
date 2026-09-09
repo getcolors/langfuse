@@ -1,0 +1,19 @@
+# The whole convergence: seven plays against six hosts, in dependency order.
+#
+# The storage tier's play is getcolors/neon's own main.yml, rendered unchanged
+# from the pinned dependency into neon/ beside this file -- not copied into
+# this package, and not edited. Everything that this package adds to the Neon
+# host (the VPC publication of the compute port, the backups) is installed
+# around it, never inside it.
+#
+# Order is not cosmetic. The dependencies converge before their consumer: the
+# app play reads the Neon role password, the Redis password and the ClickHouse
+# password from the hosts that generated them, and its first boot runs the
+# Postgres and ClickHouse migrations against tiers that must already answer.
+- import_playbook: common.yml
+- import_playbook: neon-pre.yml
+- import_playbook: neon/main.yml
+- import_playbook: clickhouse.yml
+- import_playbook: redis.yml
+- import_playbook: langfuse.yml
+- import_playbook: backups.yml

@@ -2,7 +2,7 @@ profile: langfuse-fixture
 workdir: WORKDIR
 provider-compute: vultr
 provider-dns: cloudflare
-provider-backend: local
+provider-backend: r2
 compute-prevent-destroy: true
 langfuse-image: docker.langfuse.com/langfuse/langfuse:4.27.0@sha256:c9e2cab8469a5d7353e86a3252b02c52ac94ef31288ce2639ee01aabf5e4222b
 langfuse-worker-image: docker.langfuse.com/langfuse/langfuse-worker:4.27.0@sha256:091a85c3c54bf5fff7cc0073a7f35a52861cc0e30d33dd05569fe3ed66b15d8d
@@ -65,3 +65,6 @@ vultr-ssh-sources:
 vultr-http-sources: cloudflare
 r2-bucket: tofu-state-fixture
 r2-endpoint: https://fixture.r2.cloudflarestorage.com
+
+s3-bucket: fixture-state
+s3-region: eu-west-1

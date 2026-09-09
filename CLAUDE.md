@@ -85,37 +85,23 @@ Born conforming to three workspace standards. Read
 bare profile (the app host) and one alias per machine. Build and dry-run
 render `/home/build-placeholder/.ssh/<profile>` rather than reading `~/.ssh`.
 
-## The cluster is ONCE's
+## Shared compute library
 
-The six machines are delegated to ONCE's `compute-cluster` namespace per
-`../workspace/standards/compute-cluster.md`. `topology.clj` (`topology.ts`,
-`topology.py`) owns the `compute-providers` registry and the `spec` — four
-roles in play order with fixed counts (`neon` 1, `redis` 1, `clickhouse` 3,
-`app` 1), the app host as the entry the bare `<profile>` alias reaches, a
-`:created` network from `vultr-vpc-subnet`, `ssh-sources` as the one source
-list, and the pre-adoption fallback offsets 10, 11, 20 and 12 so the goldens
-kept their addresses — and calls ONCE for the node ids, the fallbacks a
-`build` renders with, the aliases, the ssh-config hosts, the compute checks
-and their messages, `read-state`, `resolved-cluster` and `adopt-state`.
-`vultr-http-sources` is deliberately not one of the spec's sources: it
-accepts the symbolic `cloudflare`, which this package resolves itself, and
-`:clickhouse-nodes must be 3` stays a package validator.
+colors-compute owns the provider registry, networking, role firewalls, SSH keys,
+remote R2 or S3 state, node fan-out, and inventory collection. The package
+supplies four roles with fixed counts: one Neon node, one Redis node, three
+ClickHouse nodes, and one app node. The app node is the entry alias. Topology
+helpers map normalized library results to the existing application inventory.
 
-The adopted cluster lives at `:once/cluster`; the package's `hosts` wrapper
-respells ONCE's `:vpc_ip` as the `:vpc-ip` the renderers read and blanks a
-singleton's index (ONCE numbers every node from 0; the inventory writes an
-`ordinal` for the replicas alone), so no template changed beyond the `params`
-output. Every resource block, count and `for_each` in that template is pinned
-by the two configuration-address manifests `scripts/golden.sh` diffs
-(`test/resources/resource-addresses-{keygen,optout}.txt`), which `--accept`
-never regenerates: `langfuse-vultr` is live, and a moved address is a
-destroyed machine. The reader `workflow/state-output` translates the live
-deployment's pre-adoption state — `hosts` with `index: null` on the
-singletons and no `provider` — into `nodes` before ONCE sees it; its next
-converge plans an output change only. Delete, rehearse and describe now fail
-closed on a backend they cannot read and on a state that does not describe
-every machine, where they once swallowed the read. Do not copy a
-`compute-cluster` function into this package.
+The library admits the exact peer addresses required by each role. This
+package resolves the symbolic Cloudflare HTTP source list and supplies it as
+application ingress. New compatible compute providers require a library version
+update only. The package owns local SSH configuration and application playbooks.
+
+Historical monolithic state and resource-address manifests are migration
+evidence. The new lifecycle refuses that state before creating resources.
+Updating a dependency or launcher does not transfer ownership. Rehearse and
+describe require the complete observed cluster and never use build addresses.
 
 ## Commands
 
@@ -153,21 +139,16 @@ must not touch `~/.ssh`.
 
 ## Coupling
 
-The package pins Green (never below `3f33f5d`, where a tofu launch failure
-became the step error ONCE's `read-state` relies on), ONCE (never below
-`b1628b7`, where `compute-cluster` landed, nor `bc06f2f` before it) and neon in
-`green/deps.edn`, the Red SDK, `package-once-red` and `package-neon-red` in
-`red/package.json`, and the Blue SDK, `package-once-blue` and
-`package-neon-blue` in `blue/pyproject.toml`. All three colours pin ONCE and
-neon at the **same rev**; `scripts/launcher.sh` checks the neon pin across
-`green/deps.edn`, `red/package.json`, `blue/pyproject.toml` and the red
-payload's `PINS`, and the ONCE pin across those and the blue payload's PEP 723
-block too; `bb pin` writes only this package's own SHA, so a neon bump is four
-hand edits and an ONCE bump five. Use `GREEN_LIB_ROOT`, `ONCE_LIB_ROOT` and
-`LANGFUSE_LIB_ROOT` (the repository root, for every colour) for working-tree
-development; there is no `NEON_LIB_ROOT` — a neon change means moving the
-pin. `cd green && bb pin` stamps all three payloads from a clean pushed HEAD;
-deployment launchers are copies, not symlinks.
+All three implementations pin the same colors-compute revision. ONCE supplies
+non-compute helpers; Neon supplies storage-tier templates. Keep the dependency
+manifests, lockfiles, and launcher metadata consistent. Red resolves compute and
+its SDK transitively through the package dependency. Green and Blue have their
+native immutable dependency declarations.
+
+Use `GREEN_LIB_ROOT`, `ONCE_LIB_ROOT`, and `LANGFUSE_LIB_ROOT` for local
+package development. Neon changes require a reviewed dependency update.
+After a clean pushed source commit, `cd green && bb pin` stamps the package
+revision into every launcher. Deployment launchers are copies.
 
 ## Documentation
 

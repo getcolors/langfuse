@@ -11,6 +11,25 @@ instances and the DNS record; Ansible converges every tier and runs the
 gates. The first consumer is
 [`langfuse-vultr`](https://github.com/getcolors/langfuse-vultr).
 
+Compute is supplied by the pinned `colors-compute` library in all three
+colours. Langfuse declares six nodes and their roles, sizes and allowed
+peer connections. The library owns provider templates, R2/S3 state,
+managed SSH keys, the deployment journal, node fan-out and joined host
+metadata. Application and DNS convergence still belong to Langfuse.
+
+Builds render `compute/shared/shared-roles.tf.json` and one
+`compute/nodes/<node_id>/node.tf.json` per node. Shared state owns the
+network, four role firewalls and optional managed key; every node has its
+own state. Database ingress uses observed peer private addresses after
+the node join. Provider support comes from the library and its declared
+capabilities; adding an adapter does not require a package provider map.
+
+Existing `<profile>/langfuse-infrastructure.tfstate` deployments are
+refused pending an explicit state migration. A library upgrade does not
+move these resources automatically. The historical resource-address
+manifests are retained for migration review. Only R2 and S3 backends are
+supported; build remains credential-free even with a remote backend.
+
 ## The interesting claim, and how it is proven
 
 Langfuse's own guidance is a single-host Docker Compose for "testing and

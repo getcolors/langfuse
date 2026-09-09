@@ -5,6 +5,7 @@
     "": {
       "name": "package-langfuse-red-dev",
       "dependencies": {
+        "colors-compute-red": "github:getcolors/colors-compute#6325b24d8a7477429164c5bb0b2a0a6454fd8c42",
         "package-neon-red": "github:getcolors/neon#87c009549a928fdf1f9dc135f9740c3baa5782d7",
         "package-once-red": "github:getcolors/once#10e525ae7c37130ab4d532b91c8d2ead94557cc8",
         "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e",
@@ -62,6 +63,8 @@
 
     "bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
 
+    "colors-compute-red": ["colors-compute-red@github:getcolors/colors-compute#6325b24", { "dependencies": { "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e" } }, "getcolors-colors-compute-6325b24", "sha512-uCue/kr1Ge8ci/8bMIyFyzWQ5nvvdl5ItS/8n1OQJiM0uE/UsHOWd8CZIErI+M32GxDk1gWoENaD2hwRs7qt9Q=="],
+
     "package-neon-red": ["package-neon-red@github:getcolors/neon#87c0095", { "peerDependencies": { "package-once-red": "*", "red": "*" }, "optionalPeers": ["package-once-red", "red"] }, "getcolors-neon-87c0095", "sha512-jevsZJgJvhTTba19qNDDIWH5WqUx444FjhsAGGB/smFh6AYAvuWBovHjAk/IXPVicLRARwNzD9YF8VAtZvl8Bg=="],
 
     "package-once-red": ["package-once-red@github:getcolors/once#10e525a", { "peerDependencies": { "red": "*" }, "optionalPeers": ["red"] }, "getcolors-once-10e525a", "sha512-7MNd1LFMFwWtMN99/cyv04BEYJcYgVUXGLZUfxxdW4iNX2dweJxaoLYuP87B71+ZmKcR36lASDeZS+ucW24Gzg=="],
@@ -73,5 +76,7 @@
     "undici-types": ["undici-types@8.3.0", "", {}, "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ=="],
 
     "zod": ["zod@4.5.4", "", {}, "sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA=="],
+
+    "colors-compute-red/red": ["red@github:getcolors/red#db9bfe6", { "dependencies": { "zod": "^4.0.0" } }, "getcolors-red-db9bfe6", "sha512-3uHKgJeICb/ljQxiTzLTLUdFNfNqvzPGv08X4LRVOU5uk7wmT7wEuVag/xhj87Qn6tvCtAG8uDp8IbIROBGmmg=="],
   }
 }

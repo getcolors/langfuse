@@ -10,9 +10,10 @@ from __future__ import annotations
 import re
 
 from blue.cli import par_name
-from package_once_blue import compute as once_compute
-from package_once_blue import compute_cluster as once_cluster
-from package_once_blue import ssh as once_ssh
+from colors_compute.planning import validate_deployment
+from colors_compute.rendering import backend_plan
+from colors_compute.ssh import _mode
+from colors_compute.deployment_request import source_cidrs
 from package_once_blue.validate import providers as once_providers
 
 from . import topology
@@ -24,9 +25,7 @@ profile_par = par_name("profile")
 # needs and which this module already depends on for the ClickHouse count;
 # they are named here too so the lifecycle reads them from the validator, as
 # the other delegating packages do.
-compute_providers = topology.compute_providers
 default_compute_provider = topology.default_compute_provider
-spec = topology.spec
 
 # Every key desired state must carry whichever provider is selected. The
 # provider-scoped keys come from `compute_providers`.
@@ -89,12 +88,11 @@ def missing(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def compute_name(opts: dict) -> str:
-    return topology.compute_name(opts)
-
-
-def keygen(opts: dict) -> bool:
-    return once_ssh.keygen(opts)
+def keygen(opts):
+    try:
+        return _mode(opts)['mode'] == 'managed'
+    except ValueError:
+        return True
 
 
 def image_version(value) -> str | None:
@@ -148,13 +146,13 @@ def state_errors(opts: dict) -> list[str]:
     ONCE's over `spec`."""
     errors: list[str] = []
     errors += [f":{k} is required"
-               for k in [*required, *once_compute.required_keys(spec, opts)]
+               for k in required
                if missing(opts.get(k))]
 
     if opts.get("provider-dns") != "cloudflare":
         errors.append(":provider-dns must be cloudflare")
-    if opts.get("provider-backend") not in ("local", "s3", "r2"):
-        errors.append(":provider-backend must be local, s3, or r2")
+    if opts.get("provider-backend") not in ("s3", "r2"):
+        errors.append(":provider-backend must be s3 or r2")
     if not isinstance(opts.get("compute-prevent-destroy"), bool):
         errors.append(":compute-prevent-destroy must be true or false")
 
@@ -265,9 +263,9 @@ def state_errors(opts: dict) -> list[str]:
     # certificate is needed: Caddy answers the ACME HTTP-01 challenge on :80,
     # and with the record unproxied that challenge arrives from Let's
     # Encrypt's own addresses, which the firewall drops.
-    if (_s(opts.get("vultr-http-sources")) == "cloudflare"
+    if (source_cidrs(opts, "http-sources", "langfuse-http-sources") == ["cloudflare"]
             and opts.get("cloudflare-proxied") is not True):
-        errors.append(":vultr-http-sources cloudflare requires :cloudflare-proxied true, "
+        errors.append(":langfuse-http-sources cloudflare requires :cloudflare-proxied true, "
                       "or ACME HTTP-01 is firewalled off and no certificate is ever issued")
     if not (missing(opts.get("r2-credential-sharing"))
             or _s(opts.get("r2-credential-sharing")) in ("split", "shared-accepted")):
@@ -278,7 +276,11 @@ def state_errors(opts: dict) -> list[str]:
     # the canonical VPC CIDR, and the six fallback addresses inside it.
     # `vultr-http-sources` is not among them: it accepts the symbolic
     # `cloudflare`, resolved by this package, and its one rule is above.
-    errors += once_cluster.state_errors(spec, opts)
+    try:
+        validate_deployment(opts, topology.topology(opts), topology.requirements(opts))
+        backend_plan(opts, str(opts.get('profile')) + '/compute/shared.tfstate')
+    except (ValueError, KeyError, TypeError) as error:
+        errors.append(str(error))
     return errors
 
 
@@ -317,8 +319,7 @@ def secret_errors(opts: dict, event: str) -> list[str]:
     secrets. A delete tears down infrastructure and never converges anything,
     so it asks for the provider credentials only."""
     create = event == "create"
-    keys = [*once_compute.secrets(spec, opts),
-            *dns_secrets,
+    keys = [*dns_secrets,
             *((storage_secrets + application_secrets) if create else []),
             *backend_secrets(opts)]
     errors = [f"required credential is not set: {par_name(k)}"
@@ -358,8 +359,6 @@ def secret_errors(opts: dict, event: str) -> list[str]:
 
 
 def tofu_env(opts: dict, slot: str) -> dict[str, str]:
-    if slot == "provider-compute":
-        return once_compute.tofu_env(spec, opts)
     if slot == "provider-dns":
         return {"cloudflare-api-token": "CLOUDFLARE_API_TOKEN"}
     if slot == "provider-backend":
