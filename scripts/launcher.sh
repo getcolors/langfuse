@@ -78,7 +78,7 @@ for colour in red blue; do
   cp "$root/skills/package-langfuse-$colour/$colour" "$tmp/$colour/$colour"; chmod +x "$tmp/$colour/$colour"
   sed "s#WORKDIR#.colors#" "$root/test/fixtures/colors.yml" > "$tmp/$colour/colors.yml"
   (cd "$tmp/$colour" && LANGFUSE_LIB_ROOT="$root" "./$colour" build >/dev/null 2>&1) || fail "$colour: LANGFUSE_LIB_ROOT build failed from a copied payload"
-  diff -r "$root/test/resources/golden/local/langfuse-fixture" "$tmp/$colour/.colors/langfuse-fixture" >/dev/null \
+  diff -r "$root/test/resources/golden/r2/langfuse-fixture" "$tmp/$colour/.colors/langfuse-fixture" >/dev/null \
     || fail "$colour: a copied payload rendered something other than the golden"
   out=$(cd "$tmp/$colour" && LANGFUSE_LIB_ROOT="$root" COLORS_PAR_PROFILE=wrong "./$colour" build 2>&1 || true)
   grep -q COLORS_PAR_PROFILE <<<"$out" || fail "$colour: COLORS_PAR_PROFILE was not refused"
