@@ -17,8 +17,9 @@ set -euo pipefail
 # the same pin. Keep that pin equal in green/deps.edn, red/package.json and
 # blue/pyproject.toml; a diff here is the first thing that shows when it drifts.
 #
-# Two fixtures, because the SSH Keypair Standard has two modes and parity means
-# both keygen and opt-out hold in every colour.
+# Vultr keygen and opt-out fixtures run against both state backends. The AWS
+# fixture also covers role-specific instances, managed S3 state, and three
+# managed application buckets with separate credentials and media CORS.
 #
 # Renders resolve each colour's package from this working tree (the *_LIB_ROOT
 # overrides), while green, once, neon, red, and blue stay on their pins — a
@@ -36,6 +37,9 @@ build_variant() {
   (cd "$root/green" && LANGFUSE_LIB_ROOT="$root" ./green build -f "$tmp/$variant-green.yml" >/dev/null)
   (cd "$root/red" && LANGFUSE_LIB_ROOT="$root/red" ./red build -f "$tmp/$variant-red.yml" >/dev/null)
   (cd "$root/blue" && uv run python -m package_langfuse_blue build -f "$tmp/$variant-blue.yml" >/dev/null)
+  if [[ $variant == aws ]]; then
+    for colour in green red blue; do python3 "$root/scripts/check-aws-storage-plan.py" "$tmp/$variant/$colour"; done
+  fi
   diff -r "$tmp/$variant/green" "$tmp/$variant/red"
   diff -r "$tmp/$variant/green" "$tmp/$variant/blue"
 }
@@ -45,6 +49,8 @@ for backend in s3 r2; do
   build_variant colors
   build_variant optout
 done
+export COLORS_PAR_PROVIDER_BACKEND=s3
+build_variant aws
 
 diff -r "$root/green/src/resources/io/github/getcolors/langfuse" "$root/red/resources"
 diff -r "$root/green/src/resources/io/github/getcolors/langfuse" "$root/blue/src/package_langfuse_blue/resources"
