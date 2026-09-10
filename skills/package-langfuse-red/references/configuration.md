@@ -112,3 +112,30 @@ Every key `colors.yml` may carry. Non-secret values only: credentials are
 |---|---|
 | `r2-bucket` | `tofu-state-…` |
 | `r2-endpoint` | `https://<account>.eu.r2.cloudflarestorage.com` |
+
+## AWS with managed S3
+
+| Key | Example |
+|---|---|
+| `provider-compute` | `aws` |
+| `aws-region` / `aws-availability-zone` | `us-east-1` / `us-east-1a` |
+| `aws-image-id` | an available Ubuntu 24.04 amd64 AMI |
+| `aws-instance-type` | `t3.xlarge` |
+| `aws-instance-type-neon` / `-app` / `-clickhouse` | `t3.xlarge` |
+| `aws-instance-type-redis` | `t3.small` |
+| `aws-root-volume-size-gb` | `60` |
+| `aws-vpc-cidr` / `aws-subnet-cidr` | `10.74.0.0/16` / `10.74.1.0/24` |
+| `langfuse-ssh-sources` | explicit SSH CIDRs |
+| `langfuse-http-sources` | `cloudflare` |
+| `provider-backend` | `s3` |
+| `s3-bucket` / `s3-region` | a deployment-unique state bucket / `us-east-1` |
+| `s3-bucket-mode` | `managed` |
+| `langfuse-storage-provider` | `s3` |
+| `langfuse-storage-managed` | `true` |
+
+Use distinct globally unique values for `neon-r2-bucket`,
+`langfuse-s3-bucket`, and `langfuse-backup-r2-bucket`. Set both the Neon
+and backup endpoints to `https://s3.us-east-1.amazonaws.com`, and both
+regions to `us-east-1`. Managed storage supplies scoped credentials at
+runtime. The existing configuration names retain `r2` for compatibility.
+Authorized deletion removes managed bucket contents as well as buckets.

@@ -1,11 +1,11 @@
 ---
 name: package-langfuse-green
-description: Provision and manage self-hosted Langfuse v4 on six Vultr machines in one VPC — a self-hosted Neon storage tier for Postgres, a Redis host, three ClickHouse replicas with Keeper, and the application host (langfuse-web, langfuse-worker, Caddy) behind a Cloudflare-proxied name, with Cloudflare R2 for events, media, Neon layers and WAL, and backups — using OpenTofu and Ansible. Use when asked to deploy, converge, rehearse recovery for, inspect or tear down self-hosted Langfuse, to run Langfuse on separate machines rather than one Docker Compose host, or to work on a colors.yml for a Langfuse deployment.
+description: Provision and manage self-hosted Langfuse v4 on six AWS or Vultr machines in one VPC — a self-hosted Neon storage tier for Postgres, a Redis host, three ClickHouse replicas with Keeper, and the application host (langfuse-web, langfuse-worker, Caddy) behind a Cloudflare-proxied name, with AWS S3 or Cloudflare R2 for events, media, Neon layers and WAL, and backups — using OpenTofu and Ansible. Use when asked to deploy, converge, rehearse recovery for, inspect or tear down self-hosted Langfuse, to run Langfuse on separate machines rather than one Docker Compose host, or to work on a colors.yml for a Langfuse deployment.
 ---
 
 # Langfuse Package Skill (Green)
 
-Provisions six Vultr machines in one VPC and converges Langfuse v4.27.0 across
+Provisions six AWS or Vultr machines in one VPC and converges Langfuse v4.27.0 across
 them: a **Neon** storage tier (storage broker, pageserver, one safekeeper,
 Postgres 17 under `compute_ctl`, layers and WAL in R2), **Redis 7.2**, three
 **ClickHouse** replicas each with a Keeper voter, and the **app** host running
@@ -86,7 +86,7 @@ Gates that run on every converge and fail it if they fail:
   and a **refusal** on Keeper — the network says what desired state says
 - `UTC` on both databases; three replicas visible through `clusterAllReplicas`;
   an authenticated cross-node query; Keeper quorum; `system.query_log` present
-- a trace, a generation and a score ingested through the public API, read
+- a trace, a generation and a score ingested through the app-host API, read
   back, found on node 0 **and** the last replica, and a **new** raw-event
   object in R2
 - a media file up through a presigned URL and back with the same sha256
@@ -119,12 +119,30 @@ Backups pair at restore time: a ClickHouse set with the **oldest Postgres
 dump completed after it**, so Postgres is the newer snapshot and every
 project a restored trace references exists.
 
+## Managed AWS deployment
+
+Use `provider-compute: aws`, `provider-backend: s3`, `s3-bucket-mode: managed`,
+`langfuse-storage-provider: s3`, and `langfuse-storage-managed: true`.
+The deployment creates the state bucket before Terraform initialization,
+and creates separate Neon, Langfuse and backup buckets with scoped IAM
+credentials. Use distinct globally unique bucket names and native S3
+endpoints/regions in the existing `*-r2-*` configuration keys. The three
+operator-held application secrets are still required.
+
+Authorized delete removes the managed application buckets and their contents
+as well as the machines; the state bucket is finalized last. Existing R2
+storage retains its prior preservation behavior.
+
+The application smoke test uses loopback on the app host. Run an external
+client as well to prove public DNS, Cloudflare proxying and HTTPS.
+
 ## Media in the browser
 
 The API media path needs nothing more. UI rendering needs a CORS rule on the
 storage bucket for `https://<langfuse-host>`, which only an Admin R2 token can
 set; add it in the R2 dashboard or with `wrangler r2 bucket cors put`. The
-smoke gate reports the preflight as `WARN` until it is there.
+smoke gate reports the preflight as `WARN` until it is there. Managed AWS
+storage creates the CORS rule during bucket provisioning.
 
 ## Configuration reference
 

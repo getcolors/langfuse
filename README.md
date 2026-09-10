@@ -1,12 +1,12 @@
 # langfuse
 
 A tri-colour Package Skill (green, red, blue) for self-hosted
-[Langfuse](https://langfuse.com) v4 on six Vultr machines in one VPC: a self-hosted **Neon** storage tier for
+[Langfuse](https://langfuse.com) v4 on six machines in one VPC (AWS or Vultr): a self-hosted **Neon** storage tier for
 Postgres, a **Redis** host, three **ClickHouse** replicas with their own
 Keeper quorum, and the application host running `langfuse-web`,
 `langfuse-worker` and Caddy behind a Cloudflare-proxied name. Cloudflare R2
 carries Neon's layers and WAL, Langfuse's raw events and media, and the
-backups. OpenTofu manages the VPC, four role-scoped firewall groups, the
+backups; managed AWS deployments use S3 with separate scoped credentials. OpenTofu manages the VPC, four role-scoped firewall groups, the
 instances and the DNS record; Ansible converges every tier and runs the
 gates. The first consumer is
 [`langfuse-vultr`](https://github.com/getcolors/langfuse-vultr).
@@ -41,7 +41,7 @@ README makes is a gate that runs on every converge, or a rehearsal that ran
 on the live build:
 
 - a trace, a generation and a score go in through the ingestion API and are
-  read back through the public API, found on ClickHouse node 0 **and** on
+  read back through the API on the app host, found on ClickHouse node 0 **and** on
   the last replica, and leave a **new** raw-event object in R2;
 - a media file goes up through a presigned URL and comes back with the same
   sha256;
@@ -56,6 +56,11 @@ on the live build:
   and an encrypted LLM connection back through the API, stops a replica
   under ingestion, restarts Redis with a job queued — and only then writes
   `.colors-recovery-verified`.
+
+The built-in application smoke test calls loopback on the app host. External
+DNS, proxy and TLS verification requires a separate client; the
+[`langfuse-aws`](https://github.com/getcolors/langfuse-aws) deployment provides
+`check_public.py` for that path.
 
 ## Install
 
@@ -224,6 +229,7 @@ deliberately hands to no host. Add it once, in the R2 dashboard or with
 ```
 
 The smoke gate reports the preflight as a `WARN` line until it is there.
+Managed AWS storage creates this CORS rule as part of the bucket lifecycle.
 
 ## Monitoring
 
@@ -235,13 +241,33 @@ status, certificate expiry. `./green describe` aggregates the six over SSH
 and exits non-zero on any problem. There is no alert sink in this package;
 point an external poller at `describe`.
 
+## Managed AWS storage
+
+Use `provider-compute: aws`, `provider-backend: s3`, and
+`s3-bucket-mode: managed` for a deployment-owned state bucket. The
+colors-compute library creates the bucket before Terraform initialization
+and removes it after all managed infrastructure has been destroyed.
+
+Set `langfuse-storage-provider: s3` and `langfuse-storage-managed: true` to
+create three distinct application buckets and scoped IAM credentials during
+convergence: `neon-r2-bucket`, `langfuse-s3-bucket`, and
+`langfuse-backup-r2-bucket`. The existing `*-r2-*` configuration names also
+accept native S3 endpoints and regions. Use
+`https://s3.us-east-1.amazonaws.com` and `us-east-1`, for example. Bucket
+names must be globally unique. Never configure expiry rules on Neon layers
+or WAL. Operator-held application encryption key, salt and initial password
+remain separate from managed storage credentials.
+
 ## Delete
 
 `./green delete` needs `COLORS_PAR_COMPUTE_PREVENT_DESTROY=false` for one
 run, stops every stack, removes the SSH config block, the DNS record, the six
 instances, the firewall groups and the VPC, and finally the machine keypair.
 It removes **nothing** in R2: the storage prefix and the backup sets outlive
-the machines on purpose.
+the machines on purpose. Managed AWS application buckets are instead removed
+after host cleanup, including their contents and IAM credentials; the managed
+state bucket is finalized last. The destruction override authorizes that data
+deletion as well as removal of the machines.
 
 ## Development
 
