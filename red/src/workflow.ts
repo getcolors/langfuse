@@ -4,10 +4,11 @@ import { preflight, type PreflightContext } from "red/lifecycle";
 import * as progress from "red/progress";
 import * as tofu from "red/tofu";
 import { adviceAdd, failed, workflow, type Opts, type WireDecl } from "red/workflow";
-import {read_deployment} from "colors-compute-red";
+import {read_deployment,finalize_backend} from "colors-compute-red";
 import * as topology from "./topology.ts";
 import * as ssh from "./ssh.ts";
 import * as sshConfig from "./ssh-config.ts";
+import * as storage from "./storage.ts";
 import * as tools from "./tools.ts";
 import * as validate from "./validate.ts";
 
@@ -26,14 +27,21 @@ export async function startStep(original:Opts,env:Record<string,string|undefined
   (o,_e,c)=>c.real&&c.event==='delete'&&o['compute-prevent-destroy']?['compute destruction is protected; set COLORS_PAR_COMPUTE_PREVENT_DESTROY=false to delete']:[]],
   afterValidate:async(opts,_env,c)=>{
    if(c.real&&stateEvents.includes(c.event??'')){
-    const result:any=await (deps.readDeployment??read_deployment)(opts,env,undefined,topology.requirements(opts));
+    const result:any=await (deps.readDeployment??read_deployment)(opts,{...env,...storage.awsEnv(opts)},undefined,topology.requirements(opts));
+    if(c.event==='delete'&&opts['s3-bucket-mode']==='managed'&&result.status!=='present')return {...opts,'langfuse/finalize-only':true,'red/exit':0};
     if(result.status==='destroyed'&&c.event==='delete')return {...opts,'langfuse/already-destroyed':true,'red/exit':0};
     if(result.status!=='present')return {...opts,'red/exit':1,'red/err':'compute state unavailable; legacy monolithic state requires explicit migration'};
-    return {...opts,'colors-compute/cluster':result.cluster,'colors-compute/shared':result.shared??{},...(result.key?.private_key_path?{'ssh-private-key-path':result.key.private_key_path}:{}),'red/exit':0};
+    const ready={...opts,'colors-compute/cluster':result.cluster,'colors-compute/shared':result.shared??{},...(result.key?.private_key_path?{'ssh-private-key-path':result.key.private_key_path}:{}),'red/exit':0};
+    return c.event==='rehearse'&&storage.managed(opts)?await storage.readCredentials(ready):ready;
    }
    if(c.real&&c.event==='create')return sshConfig.preflight(opts);
    return {...ssh.withMachineKey(opts),'red/exit':0};
   }},env);
+}
+
+export async function backendFinalizeStep(opts:Opts):Promise<Opts>{
+ try{const result=await finalize_backend(opts,{...process.env,...storage.awsEnv(opts)});if(!['destroyed','absent','skipped'].includes(result.status))throw Error();return {...opts,'red/exit':0};}
+ catch{return {...opts,'red/exit':1,'red/err':'managed backend finalization refused; live or unowned state remains'};}
 }
 
 export function wireFn(step: string, runOpts: Opts): WireDecl | undefined {
@@ -50,8 +58,10 @@ export function wireFn(step: string, runOpts: Opts): WireDecl | undefined {
         "langfuse/ssh-config": [tools.ansibleLocalStep, "langfuse/dns"],
         // DNS before the compute destroy: a record pointing at a released
         // address is worse than no record.
-        "langfuse/dns": [tools.dnsStep, "langfuse/infrastructure"],
-        "langfuse/infrastructure": [tools.infrastructureStep],
+        "langfuse/dns": [tools.dnsStep, storage.managed(runOpts)?"langfuse/storage":"langfuse/infrastructure"],
+        "langfuse/storage": [storage.storageStep,"langfuse/infrastructure"],
+        "langfuse/infrastructure": runOpts["s3-bucket-mode"]==="managed"?[tools.infrastructureStep,"langfuse/backend-finalize"]:[tools.infrastructureStep],
+        "langfuse/backend-finalize": [backendFinalizeStep],
       };
       return graph[step];
     }
@@ -75,7 +85,8 @@ export function wireFn(step: string, runOpts: Opts): WireDecl | undefined {
         // After compute, which is where the addresses first exist, and before
         // the stage that converges the machines — the converge and the
         // acceptance both ride the aliases this stage writes.
-        "langfuse/infrastructure": [tools.infrastructureStep, "langfuse/dns"],
+        "langfuse/infrastructure": [tools.infrastructureStep,storage.managed(runOpts)?"langfuse/storage":"langfuse/dns"],
+        "langfuse/storage": [storage.storageStep,"langfuse/dns"],
         // DNS before the converge: Caddy provisions its certificate over ACME
         // on first start, and the HTTP-01 challenge needs the name to already
         // resolve to the app host.
@@ -97,15 +108,17 @@ export function backendAdvice(tool: string) {
 }
 
 export const sideEffecting = [
+  "langfuse/backend-finalize", "langfuse/storage",
   "langfuse/infrastructure", "langfuse/dns", "langfuse/ssh-config",
   "langfuse/ansible", "langfuse/acceptance", "langfuse/ssh-cleanup",
   "langfuse/rehearsal", "langfuse/describe",
 ];
 
 function create() {
-  let wf = workflow({ start: "langfuse/start", wireFn, nextFn:(_step,successors,opts)=>opts["langfuse/already-destroyed"]||failed(opts)?[]:(successors??[]).map(step=>[step,opts]) });
+  let wf = workflow({ start: "langfuse/start", wireFn, nextFn:(step,successors,opts)=>opts["langfuse/already-destroyed"]||failed(opts)?[]:step==="langfuse/start"&&opts["langfuse/finalize-only"]?[["langfuse/backend-finalize",opts]]:(successors??[]).map(step=>[step,opts]) });
   wf = adviceAdd(wf, "langfuse/dns", "before", "langfuse.workflow/backend",
     backendAdvice(tools.dnsTool));
+  wf = adviceAdd(wf,"langfuse/storage","before","langfuse.workflow/storage-backend",backendAdvice(storage.tool));
   return dryRun.advise(progress.advise(wf), sideEffecting);
 }
 

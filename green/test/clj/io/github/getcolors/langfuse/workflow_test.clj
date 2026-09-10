@@ -32,3 +32,12 @@
             (is (= 6 (count (filter #(= "node.tf.json" (.getName %)) files))))
             (is (some #(= "compose.yml" (.getName %)) files))))
         (finally (doseq [file (reverse (file-seq dir))] (io/delete-file file)))))))
+(deftest managed-backend-outlives-all-application-states
+  (let [create {:green/event :create :langfuse-storage-managed true :s3-bucket-mode "managed"}
+        delete (assoc create :green/event :delete)]
+    (is (= [:langfuse/storage] (vec (rest (w/wire-fn :langfuse/infrastructure create)))))
+    (is (= [:langfuse/dns] (vec (rest (w/wire-fn :langfuse/storage create)))))
+    (is (= [:langfuse/storage] (vec (rest (w/wire-fn :langfuse/dns delete)))))
+    (is (= [:langfuse/infrastructure] (vec (rest (w/wire-fn :langfuse/storage delete)))))
+    (is (= [:langfuse/backend-finalize] (vec (rest (w/wire-fn :langfuse/infrastructure delete)))))
+    (is (= [] (vec (rest (w/wire-fn :langfuse/backend-finalize delete)))))))

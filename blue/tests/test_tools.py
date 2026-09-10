@@ -146,3 +146,23 @@ def test_json_numbers_render_the_way_cheshire_does():
     assert tools._pretty(True) == "true"
     assert tools._pretty([]) == "[ ]"
     assert tools._pretty({}) == "{ }"
+
+
+def test_aws_symbolic_cloudflare_sources_match_ipv4_origins_and_secrets_stay_out_of_templates():
+    aws = {**opts, 'provider-compute': 'aws', 'langfuse-http-sources': ['cloudflare'], 'langfuse/storage-credentials': {'secret': 'never-render'}}
+    resolved = tools.http_sources(aws)
+    assert resolved['ranges'] and all(':' not in cidr for cidr in resolved['ranges'])
+    assert 'langfuse/storage-credentials' not in tools.ansible_data(aws)
+    explicit = {**aws, 'langfuse-http-sources': ['2001:db8::/32']}
+    assert tools.http_sources(explicit)['ranges'] == ['2001:db8::/32']
+
+
+async def test_read_root_owned_credentials_uses_noninteractive_sudo(monkeypatch):
+    from types import SimpleNamespace
+    calls=[]
+    async def quiet(args, env, timeout):
+        calls.append(args)
+        return SimpleNamespace(exit=0,out='fixture-value\n',err='')
+    monkeypatch.setattr(tools,'run_quiet',quiet)
+    assert await tools.ssh_read('example-app-0','/etc/langfuse/secrets/project_public_key') == 'fixture-value'
+    assert calls[0][-5:] == ['sudo','-n','cat','--','/etc/langfuse/secrets/project_public_key']

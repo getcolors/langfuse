@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "colors-compute-blue @ git+https://github.com/getcolors/colors-compute.git@6325b24d8a7477429164c5bb0b2a0a6454fd8c42#subdirectory=blue","package-langfuse-blue", "blue"]
+#   "colors-compute-blue @ git+https://github.com/getcolors/colors-compute.git@09ec539e75dc21c4dafb019eb8f9da276e695f6f#subdirectory=blue","package-langfuse-blue", "blue"]
 #
 # [tool.uv.sources]
 # package-langfuse-blue = { git = "https://github.com/getcolors/langfuse.git", rev = "b6c9e2a137f417c6e6991170f18e57e43a7a6832", subdirectory = "blue" }

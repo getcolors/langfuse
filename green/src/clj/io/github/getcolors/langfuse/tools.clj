@@ -11,6 +11,7 @@
             [io.github.getcolors.langfuse.ssh-config :as ssh-config]
             [io.github.getcolors.langfuse.topology :as topology]
             [io.github.getcolors.langfuse.validate :as validate]
+            [io.github.getcolors.langfuse.storage :as storage]
             [io.github.getcolors.compute-deployment-request :as deployment]
             [io.github.getcolors.compute-planning :as planning]
             [io.github.getcolors.compute-orchestration :as orchestration]))
@@ -75,10 +76,14 @@
     (catch Exception _ nil)))
 
 (defn http-sources [opts]
-  (let [sources (deployment/source-cidrs opts "http-sources" "langfuse-http-sources")]
-    (cond (not= sources ["cloudflare"]) {:source :explicit :ranges sources}
-          (or (= :build (:green/event opts)) (:green/dry-run opts)) {:source :fallback :ranges cloudflare-ranges-fallback}
-          :else (if-let [live (fetch-cloudflare-ranges)] {:source :fetched :ranges live} {:source :fallback :ranges cloudflare-ranges-fallback}))))
+  (let [sources (deployment/source-cidrs opts "http-sources" "langfuse-http-sources")
+        result (cond (not= sources ["cloudflare"]) {:source :explicit :ranges sources}
+                     (or (= :build (:green/event opts)) (:green/dry-run opts)) {:source :fallback :ranges cloudflare-ranges-fallback}
+                     :else (if-let [live (fetch-cloudflare-ranges)] {:source :fetched :ranges live} {:source :fallback :ranges cloudflare-ranges-fallback}))]
+    ;; AWS nodes currently have IPv4 origins. Resolve symbolic Cloudflare sources
+    ;; for that address family; explicit operator CIDRs still validate unchanged.
+    (if (and (= "aws" (:provider-compute opts)) (= sources ["cloudflare"]))
+      (update result :ranges #(vec (remove (fn [cidr] (str/includes? cidr ":")) %))) result)))
 
 (defn ranges-checksum [xs]
   (let [d (java.security.MessageDigest/getInstance "SHA-256")]
@@ -104,7 +109,7 @@
         (let [requirements (topology/requirements opts ranges)
               planning? (or (= :build (:green/event opts)) (:green/dry-run opts))
               result (if planning? (planning/plan-deployment opts (topology/topology opts) requirements)
-                         (orchestration/orchestrate opts (topology/topology opts) requirements))]
+                         (orchestration/orchestrate opts (topology/topology opts) requirements (merge (into {} (System/getenv)) (storage/aws-env opts))))]
           (when planning?
             (let [root (str (:workdir opts) "/" (:profile opts) "/compute")
                   stages (cons ["shared" (get-in result [:documents :shared])] (map (fn [[id docs]] [(str "nodes/" id) docs]) (get-in result [:documents :nodes])))]
@@ -224,7 +229,7 @@
   through this map would let Selmer HTML-escape the quotes and hand Ansible
   `&#39;`."
   [opts]
-  (assoc opts
+  (assoc (dissoc opts :langfuse/storage-credentials)
          :ssh-keygen (validate/keygen? opts)
          :neon-compute-port topology/neon-compute-port
          :clickhouse-node-count topology/clickhouse-node-count))
@@ -270,6 +275,15 @@
       (map (fn [f] (spec (template "ansible" f) (str dir "/" f) data)) ansible-files)
       [(raw-spec (str dir "/inventory.json") (inventory data (hosts data)))]))))
 
+(defn managed-ansible-step [opts playbook]
+  (let [dir (tool-dir opts ansible-tool)
+        rendered (sc/scaffold opts (ansible-specs opts))
+        result (process/run-with-timeout ["ansible-playbook" "-i" "inventory.json" playbook]
+                 {:dir dir :extra-env (storage/credential-env opts)} 7200000)]
+    (if (zero? (:exit result))
+      (assoc rendered :green/exit 0 :ansible/recap (ansible/parse-recap (:out result)))
+      (assoc rendered :green/exit 1 :green/err (str "Ansible convergence failed: " (:out result) (:err result))))))
+
 (defn ansible-step [opts]
   (let [dir (tool-dir opts ansible-tool)]
     (if (and (= :delete (:green/event opts)) (nil? (:colors-compute/cluster opts)))
@@ -278,11 +292,13 @@
       ;; unreadable state, or a partial one, never reaches here — the delete
       ;; failed closed at adoption.)
       (assoc opts :green/exit 0)
+      (if (and (storage/managed? opts) (= :create (:green/event opts)))
+        (managed-ansible-step opts "site.yml")
       (ansible/ansible-with-spec opts
         {:dir dir :inventory "inventory.json"
          :playbooks {:create "site.yml" :delete "cleanup.yml"}
          :host-key-checking false}
-        (ansible-specs opts)))))
+        (ansible-specs opts))))))
 
 (defn rehearsal-step
   "The recovery rehearsal: restore both stores from their newest completed
@@ -291,11 +307,13 @@
   recovery marker lands. Runs the same rendered tree as the converge."
   [opts]
   (let [dir (tool-dir opts ansible-tool)]
+    (if (and (storage/managed? opts) (= :rehearse (:green/event opts)))
+      (managed-ansible-step opts "rehearsal.yml")
     (ansible/ansible-with-spec opts
       {:dir dir :inventory "inventory.json"
        :playbooks {:create "rehearsal.yml"}
        :host-key-checking false}
-      (ansible-specs opts))))
+      (ansible-specs opts)))))
 
 ;; ------------------------------------------------------------- acceptance
 
@@ -310,7 +328,7 @@
   "A file's content read over SSH through the generated alias, held only in
   this process. Never merged into opts, never printed."
   [alias path]
-  (let [r (run-quiet ["ssh" "-o" "BatchMode=yes" alias "cat" path] {} 20000)]
+  (let [r (run-quiet ["ssh" "-o" "BatchMode=yes" alias "sudo" "-n" "cat" "--" path] {} 20000)]
     (when (zero? (:exit r)) (str/trim (str (:out r))))))
 
 (defn curl-args

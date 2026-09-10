@@ -100,3 +100,15 @@
     (is (= "langfuse-test" (:name (first stanzas))))
     (is (= "1.1.1.6" (:ip (first stanzas))))
     (is (= "langfuse-test-neon-0" (:name (second stanzas))))))
+(deftest aws-cloudflare-origin-address-family-and-template-secret-boundary
+  (let [aws (assoc opts :provider-compute "aws" :langfuse-http-sources ["cloudflare"] :langfuse/storage-credentials {:secret "never-render"})
+        resolved (tools/http-sources aws)]
+    (is (seq (:ranges resolved)))
+    (is (not-any? #(str/includes? % ":") (:ranges resolved)))
+    (is (not (contains? (tools/ansible-data aws) :langfuse/storage-credentials)))
+    (is (= ["2001:db8::/32"] (:ranges (tools/http-sources (assoc aws :langfuse-http-sources ["2001:db8::/32"])))))))
+(deftest read-root-owned-credentials-with-sudo
+  (let [calls (atom [])]
+    (with-redefs [tools/run-quiet (fn [args _ _] (swap! calls conj args) {:exit 0 :out "fixture-value\n"})]
+      (is (= "fixture-value" (tools/ssh-read "example-app-0" "/etc/langfuse/secrets/project_public_key"))))
+    (is (= ["sudo" "-n" "cat" "--" "/etc/langfuse/secrets/project_public_key"] (vec (take-last 5 (first @calls)))))))

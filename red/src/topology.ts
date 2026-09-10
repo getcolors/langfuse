@@ -8,7 +8,7 @@ export const roles:Role[]=['neon','redis','clickhouse','app'];
 export const topology=(_opts:Opts)=>roles.map(role=>({role,count:role==='clickhouse'?3:1}));
 export interface Host {role:string;index:number|null;node_id:string;name:string;ip:string;'vpc-ip':string;user:string;sudoer:string;[extra:string]:any}
 export function requirements(opts:Opts,httpRanges?:string[]):any {
- if(httpRanges===undefined){const sources=source_cidrs(opts,'http-sources','langfuse-http-sources');httpRanges=sources.length===1&&sources[0]==='cloudflare'?cloudflareRangesFallback:sources;}
+ if(httpRanges===undefined){const sources=source_cidrs(opts,'http-sources','langfuse-http-sources');httpRanges=sources.length===1&&sources[0]==='cloudflare'?(opts['provider-compute']==='aws'?cloudflareRangesFallback.filter(cidr=>!cidr.includes(':')):cloudflareRangesFallback):sources;}
  const ssh={id:'ssh',protocol:'tcp',from_port:22,to_port:22,sources:source_cidrs(opts,'ssh-sources','langfuse-ssh-sources')};
  const peer=(id:string,port:number,peer_roles:string[])=>({id,protocol:'tcp',from_port:port,to_port:port,peer_roles});
  const policy=(rules:any[])=>({ingress:[ssh,...rules],egress:'all',private_filter:true});

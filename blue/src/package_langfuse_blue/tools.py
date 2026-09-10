@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import math
+import os
 import secrets
 import time
 import urllib.request
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import package_neon_blue
 from blue import tofu
-from blue.ansible import ansible_with_spec
+from blue.ansible import ansible_with_spec, parse_recap
 from blue.cli import stage_dir
 from blue.runtime import runtime
 from blue.scaffold import PRESERVE_JINJA_DELIMITERS, content_spec
@@ -23,7 +24,7 @@ from colors_compute.planning import plan_deployment
 from colors_compute.deployment_request import source_cidrs
 from blue.scaffold import scaffold
 
-from . import ssh_config, topology, validate
+from . import ssh_config, topology, validate, storage
 from .utils import clj_str as _s
 
 infrastructure_tool = "langfuse-infrastructure"
@@ -204,10 +205,11 @@ def http_sources(opts):
     sources = source_cidrs(opts, 'http-sources', 'langfuse-http-sources')
     if sources != ['cloudflare']:
         return {'source': 'explicit', 'ranges': sources}
+    select = lambda ranges: [cidr for cidr in ranges if ':' not in cidr] if opts.get('provider-compute') == 'aws' else ranges
     if opts.get('blue/event') == 'build' or opts.get('blue/dry-run'):
-        return {'source': 'fallback', 'ranges': cloudflare_ranges_fallback}
+        return {'source': 'fallback', 'ranges': select(cloudflare_ranges_fallback)}
     live = fetch_cloudflare_ranges()
-    return {'source': 'fetched', 'ranges': live} if live else {'source': 'fallback', 'ranges': cloudflare_ranges_fallback}
+    return {'source': 'fetched', 'ranges': select(live)} if live else {'source': 'fallback', 'ranges': select(cloudflare_ranges_fallback)}
 
 
 def ranges_checksum(values: list[str]) -> str:
@@ -233,7 +235,7 @@ async def infrastructure_step(opts):
             specs.append(raw_spec(str(root / 'http-sources.json'), _pretty({'origin': resolved['source'], 'checksum': ranges_checksum(resolved['ranges']), 'ranges': resolved['ranges']})))
             scaffold(opts, specs)
         else:
-            result = await orchestrate(opts, topology.topology(opts), requirements)
+            result = await orchestrate(opts, topology.topology(opts), requirements, {**os.environ, **storage.aws_env(opts)})
         if result['status'] not in ('planned', 'ready', 'destroyed'):
             return {**opts, 'blue/exit': 1, 'blue/err': '\n'.join(result.get('errors', [])) or 'compute lifecycle refused'}
         output = {**opts, 'blue/exit': 0}
@@ -364,7 +366,7 @@ def ansible_data(opts: dict) -> dict:
     play, where `preserve-jinja-delimiters` passes it through untouched —
     routing it through this map would let the template engine HTML-escape the
     quotes and hand Ansible `&#39;`."""
-    return {**opts,
+    return {**{k: v for k, v in opts.items() if k != "langfuse/storage-credentials"},
             "ssh-keygen": validate.keygen(opts),
                         "neon-compute-port": topology.NEON_COMPUTE_PORT,
             "clickhouse-node-count": topology.CLICKHOUSE_NODE_COUNT}
@@ -415,6 +417,14 @@ def ansible_specs(opts: dict) -> list[dict]:
             raw_spec(f"{dir}/inventory.json", inventory(data, hosts(data)))]
 
 
+async def managed_ansible_step(opts, playbook):
+    rendered = scaffold(opts, ansible_specs(opts))
+    result = await runtime.exec(["ansible-playbook", "-i", "inventory.json", playbook], cwd=tool_dir(opts, ansible_tool), env=storage.credential_env(opts), timeout_ms=7200000)
+    if result.exit:
+        return {**rendered, "blue/exit": 1, "blue/err": f"Ansible convergence failed: {result.out}{result.err}"}
+    return {**rendered, "blue/exit": 0, "ansible/recap": parse_recap(result.out)}
+
+
 async def ansible_step(opts: dict) -> dict:
     dir = tool_dir(opts, ansible_tool)
     if opts.get("blue/event") == "delete" and opts.get("colors-compute/cluster") is None:
@@ -423,6 +433,8 @@ async def ansible_step(opts: dict) -> dict:
         # unreadable state, or a partial one, never reaches here — the delete
         # failed closed at adoption.)
         return {**opts, "blue/exit": 0}
+    if storage.managed(opts) and opts.get("blue/event") == "create":
+        return await managed_ansible_step(opts, "site.yml")
     return await ansible_with_spec(
         opts, ansible_specs(opts),
         dir=dir, inventory="inventory.json",
@@ -437,6 +449,8 @@ async def rehearsal_step(opts: dict) -> dict:
     Only then the recovery marker lands. Runs the same rendered tree as the
     converge."""
     dir = tool_dir(opts, ansible_tool)
+    if storage.managed(opts) and opts.get("blue/event") == "rehearse":
+        return await managed_ansible_step(opts, "rehearsal.yml")
     return await ansible_with_spec(
         opts, ansible_specs(opts),
         dir=dir, inventory="inventory.json",
@@ -457,7 +471,7 @@ async def run_quiet(args: list[str], env: dict[str, str], timeout_ms: int):
 async def ssh_read(alias: str, path: str) -> str | None:
     """A file's content read over SSH through the generated alias, held only
     in this process. Never merged into opts, never printed."""
-    r = await run_quiet(["ssh", "-o", "BatchMode=yes", alias, "cat", path], {}, 20000)
+    r = await run_quiet(["ssh", "-o", "BatchMode=yes", alias, "sudo", "-n", "cat", "--", path], {}, 20000)
     if _exit(r) != 0:
         return None
     return _s(_out(r)).strip()

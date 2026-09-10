@@ -71,3 +71,27 @@ def test_dns_backend_credentials_remain_separate_from_compute():
     assert env['AWS_SECRET_ACCESS_KEY'] == 'state-secret'
     assert env['CLOUDFLARE_API_TOKEN'] == 'c'
     assert 'VULTR_API_KEY' not in env
+
+def test_managed_s3_order_keeps_backend_until_all_application_state_is_empty():
+    def managed_chain(event):
+        step, found = 'langfuse/start', []
+        while True:
+            found.append(step)
+            edge = w.wire_fn(step, {'blue/event': event, 'langfuse-storage-managed': True, 's3-bucket-mode': 'managed'})
+            if len(edge) == 1: return found
+            step = edge[1]
+    assert managed_chain('create') == ['langfuse/start','langfuse/infrastructure','langfuse/storage','langfuse/dns','langfuse/ssh-config','langfuse/ansible','langfuse/acceptance']
+    assert managed_chain('delete') == ['langfuse/start','langfuse/ansible','langfuse/ssh-config','langfuse/dns','langfuse/storage','langfuse/infrastructure','langfuse/backend-finalize']
+
+
+async def test_backend_finalization_delegates_and_keeps_failure_closed(monkeypatch):
+    calls = []
+    async def finalize(opts, env):
+        calls.append((opts['profile'], env['AWS_ACCESS_KEY_ID']))
+        return {'status': 'absent'}
+    monkeypatch.setattr(w, 'finalize_backend', finalize)
+    result = await w.backend_finalize_step({'profile':'example','aws-access-key-id':'fixture-access'})
+    assert result['blue/exit'] == 0 and calls == [('example','fixture-access')]
+    async def refuse(*_): raise ValueError('unowned state')
+    monkeypatch.setattr(w, 'finalize_backend', refuse)
+    assert (await w.backend_finalize_step({'profile':'example'}))['blue/exit'] == 1

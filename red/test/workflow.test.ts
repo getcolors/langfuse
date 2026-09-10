@@ -31,3 +31,19 @@ test('native workflow builds all application artifacts in managed and external m
  expect(existsSync(join(dir,base.profile,'langfuse-ansible','site.yml'))).toBe(true);
  }finally{rmSync(dir,{recursive:true,force:true});}}
 });
+test('managed S3 order retains backend through application cleanup',()=>{
+ const create={'red/event':'create','langfuse-storage-managed':true,'s3-bucket-mode':'managed'};
+ const del={...create,'red/event':'delete'};
+ expect(w.wireFn('langfuse/infrastructure',create)?.slice(1)).toEqual(['langfuse/storage']);
+ expect(w.wireFn('langfuse/storage',create)?.slice(1)).toEqual(['langfuse/dns']);
+ expect(w.wireFn('langfuse/dns',del)?.slice(1)).toEqual(['langfuse/storage']);
+ expect(w.wireFn('langfuse/storage',del)?.slice(1)).toEqual(['langfuse/infrastructure']);
+ expect(w.wireFn('langfuse/infrastructure',del)?.slice(1)).toEqual(['langfuse/backend-finalize']);
+ expect(w.wireFn('langfuse/backend-finalize',del)?.slice(1)).toEqual([]);
+});
+test('AWS symbolic Cloudflare sources target IPv4 origins and omit storage secrets',async()=>{
+ const opts={...base,'red/event':'build','provider-compute':'aws','langfuse-http-sources':['cloudflare'],'langfuse/storage-credentials':{secret:'never-render'}};
+ const sources=await tools.httpSources(opts);expect(sources.ranges.length).toBeGreaterThan(0);expect(sources.ranges.some(c=>c.includes(':'))).toBe(false);
+ expect(tools.ansibleData(opts)['langfuse/storage-credentials']).toBeUndefined();
+ expect((await tools.httpSources({...opts,'langfuse-http-sources':['2001:db8::/32']})).ranges).toEqual(['2001:db8::/32']);
+});

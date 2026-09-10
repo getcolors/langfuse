@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import * as ansible from "red/ansible";
 import { stageDir } from "red/cli";
-import { PRESERVE_JINJA_DELIMITERS, contentSpec, type Spec, type Template } from "red/scaffold";
+import { scaffold, PRESERVE_JINJA_DELIMITERS, contentSpec, type Spec, type Template } from "red/scaffold";
 import * as tofu from "red/tofu";
 import { runtime, type ExecResult } from "red/runtime";
 import type { Opts } from "red/workflow";
@@ -12,6 +12,7 @@ import {join} from "node:path";
 import { neonResource } from "./neon.ts";
 import * as sshConfig from "./ssh-config.ts";
 import * as topology from "./topology.ts";
+import * as storage from "./storage.ts";
 import * as validate from "./validate.ts";
 
 import ansibleLocalMainYml from "../resources/tools/ansible-local/main.yml" with { type: "text" };
@@ -180,8 +181,9 @@ export interface HttpSources {
 export async function httpSources(opts:Opts):Promise<HttpSources>{
  const sources=source_cidrs(opts,'http-sources','langfuse-http-sources');
  if(sources.length!==1||sources[0]!=='cloudflare')return {source:'explicit',ranges:sources};
- if(opts['red/event']==='build'||opts['red/dry-run'])return {source:'fallback',ranges:cloudflareRangesFallback};
- const live=await fetchCloudflareRanges();return live?{source:'fetched',ranges:live}:{source:'fallback',ranges:cloudflareRangesFallback};
+ const select=(ranges:string[])=>opts['provider-compute']==='aws'?ranges.filter(cidr=>!cidr.includes(':')):ranges;
+ if(opts['red/event']==='build'||opts['red/dry-run'])return {source:'fallback',ranges:select(cloudflareRangesFallback)};
+ const live=await fetchCloudflareRanges();return live?{source:'fetched',ranges:select(live)}:{source:'fallback',ranges:select(cloudflareRangesFallback)};
 }
 
 export function rangesChecksum(values: string[]): string {
@@ -194,7 +196,7 @@ export async function infrastructureStep(opts:Opts,deps:any={}):Promise<Opts>{
  if(opts['red/event']==='create'&&!opts['red/dry-run']&&resolved.source==='fallback')return {...opts,'red/exit':1,'red/err':'Cloudflare ingress ranges unavailable; refusing stale fallback'};
  try{
   const req=topology.requirements(opts,resolved.ranges),planning=opts['red/event']==='build'||opts['red/dry-run'];
-  const result:any=planning?plan_deployment(opts,topology.topology(opts),req):await (deps.orchestrate??orchestrate)(opts,topology.topology(opts),req);
+  const result:any=planning?plan_deployment(opts,topology.topology(opts),req):await (deps.orchestrate??orchestrate)(opts,topology.topology(opts),req,{...process.env,...storage.awsEnv(opts)});
   if(planning){const root=join(opts.workdir,opts.profile,'compute');
    const stages:any[]=[['shared',result.documents.shared],...Object.entries(result.documents.nodes).map(([id,docs])=>['nodes/'+id,docs])];
    const sorted=(v:any):any=>Array.isArray(v)?v.map(sorted):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
@@ -329,8 +331,9 @@ export function inventory(_opts: Opts, list: topology.Host[]): string {
 // through this map would let the template engine HTML-escape the quotes and
 // hand Ansible `&#39;`.
 export function ansibleData(opts: Opts): Opts {
+  const {"langfuse/storage-credentials": _credentials, ...templateOpts} = opts;
   return {
-    ...opts,
+    ...templateOpts,
     "ssh-keygen": validate.keygen(opts),
     "neon-compute-port": topology.neonComputePort,
     "clickhouse-node-count": topology.clickhouseNodeCount,
@@ -427,6 +430,12 @@ export function ansibleSpecs(opts: Opts): Spec[] {
   ];
 }
 
+export async function managedAnsibleStep(opts:Opts,playbook:string):Promise<Opts>{
+ const rendered=scaffold(opts,ansibleSpecs(opts));
+ const result=await runtime.exec(['ansible-playbook','-i','inventory.json',playbook],{cwd:toolDir(opts,ansibleTool),env:storage.credentialEnv(opts),timeoutMs:7200000});
+ return result.exit?{...rendered,'red/exit':1,'red/err':`Ansible convergence failed: ${result.out}${result.err}`}:{...rendered,'red/exit':0,'ansible/recap':ansible.parseRecap(result.out)};
+}
+
 export async function ansibleStep(opts: Opts): Promise<Opts> {
   const dir = toolDir(opts, ansibleTool);
   if (opts["red/event"] === "delete" && opts["colors-compute/cluster"] == null) {
@@ -436,6 +445,7 @@ export async function ansibleStep(opts: Opts): Promise<Opts> {
     // failed closed at adoption.)
     return { ...opts, "red/exit": 0 };
   }
+  if(storage.managed(opts)&&opts['red/event']==='create')return managedAnsibleStep(opts,'site.yml');
   return ansible.ansibleWithSpec(opts, {
     dir,
     inventory: "inventory.json",
@@ -450,6 +460,7 @@ export async function ansibleStep(opts: Opts): Promise<Opts> {
 // recovery marker lands. Runs the same rendered tree as the converge.
 export async function rehearsalStep(opts: Opts): Promise<Opts> {
   const dir = toolDir(opts, ansibleTool);
+  if(storage.managed(opts)&&opts['red/event']==='rehearse')return managedAnsibleStep(opts,'rehearsal.yml');
   return ansible.ansibleWithSpec(opts, {
     dir,
     inventory: "inventory.json",
@@ -470,7 +481,7 @@ export async function runQuiet(args: string[], env: Record<string, string>, time
 // A file's content read over SSH through the generated alias, held only in
 // this process. Never merged into opts, never printed.
 export async function sshRead(alias: string, path: string): Promise<string | undefined> {
-  const r = await runQuiet(["ssh", "-o", "BatchMode=yes", alias, "cat", path], {}, 20000);
+  const r = await runQuiet(["ssh", "-o", "BatchMode=yes", alias, "sudo", "-n", "cat", "--", path], {}, 20000);
   return r.exit === 0 ? String(r.out ?? "").trim() : undefined;
 }
 
