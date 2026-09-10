@@ -66,7 +66,6 @@ required = [
     "langfuse-media-backup-max-age-hours",
     # public name and TLS
     "cloudflare-zone", "cloudflare-record-name", "cloudflare-proxied",
-    "r2-bucket", "r2-endpoint",
 ]
 
 image_keys = ["langfuse-image", "langfuse-worker-image", "caddy-image", "redis-image",
@@ -146,7 +145,7 @@ def state_errors(opts: dict) -> list[str]:
     ONCE's over `spec`."""
     errors: list[str] = []
     errors += [f":{k} is required"
-               for k in required
+               for k in [*required, *({"s3": ["s3-bucket", "s3-region"], "r2": ["r2-bucket", "r2-endpoint"]}.get(opts.get("provider-backend"), []))]
                if missing(opts.get(k))]
 
     if opts.get("provider-dns") != "cloudflare":
@@ -238,15 +237,33 @@ def state_errors(opts: dict) -> list[str]:
         if not missing(opts.get(k)) and not url_re.fullmatch(_s(opts.get(k))):
             errors.append(f":{k} must be an https URL")
 
+    if "langfuse-storage-managed" in opts and not isinstance(opts["langfuse-storage-managed"], bool):
+        errors.append(":langfuse-storage-managed must be true or false")
+    if opts.get("langfuse-storage-managed"):
+        if opts.get("langfuse-storage-provider") != "s3":
+            errors.append("managed storage requires :langfuse-storage-provider s3")
+        if opts.get("provider-backend") != "s3":
+            errors.append("managed storage requires :provider-backend s3")
+        if not re.fullmatch(r"[a-z]{2}(?:-[a-z]+)+-\d+", _s(opts.get("neon-r2-region"))):
+            errors.append("managed storage requires an AWS region in :neon-r2-region")
+        if opts.get("neon-r2-region") != opts.get("langfuse-backup-r2-region"):
+            errors.append("managed storage bucket regions must match")
+        bucket_keys = ["neon-r2-bucket", "langfuse-s3-bucket", "langfuse-backup-r2-bucket"]
+        if len({opts.get(key) for key in bucket_keys}) != 3:
+            errors.append("managed storage requires three distinct application buckets")
+        for key in bucket_keys:
+            if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", _s(opts.get(key))):
+                errors.append(f":{key} must be a valid S3 bucket name")
+
     # --- buckets ---------------------------------------------------------------
     # Live data and OpenTofu state must not share a bucket: one lifecycle
     # mistake would take out both. Backups must share a bucket with neither.
     for k in ["neon-r2-bucket", "langfuse-s3-bucket"]:
-        if not missing(opts.get(k)) and _s(opts.get(k)) == _s(opts.get("r2-bucket")):
+        if not missing(opts.get(k)) and _s(opts.get(k)) == _s(opts.get("s3-bucket" if opts.get("provider-backend") == "s3" else "r2-bucket")):
             errors.append(f":{k} must not be the OpenTofu state bucket")
     if (not missing(opts.get("langfuse-backup-r2-bucket"))
             and _s(opts.get("langfuse-backup-r2-bucket"))
-            in {_s(opts.get("r2-bucket")), _s(opts.get("neon-r2-bucket")),
+            in {_s(opts.get("s3-bucket" if opts.get("provider-backend") == "s3" else "r2-bucket")), _s(opts.get("neon-r2-bucket")),
                 _s(opts.get("langfuse-s3-bucket"))}):
         errors.append(":langfuse-backup-r2-bucket must not be the state or a live-data bucket")
 
@@ -320,13 +337,13 @@ def secret_errors(opts: dict, event: str) -> list[str]:
     so it asks for the provider credentials only."""
     create = event == "create"
     keys = [*dns_secrets,
-            *((storage_secrets + application_secrets) if create else []),
+            *((([] if opts.get("langfuse-storage-managed") else storage_secrets) + application_secrets) if create else []),
             *backend_secrets(opts)]
     errors = [f"required credential is not set: {par_name(k)}"
               for k in dict.fromkeys(keys) if missing(opts.get(k))]
     # Blast radius, enforced rather than merely observed. The shared pair
     # stays reachable, but only as a deliberate, committed choice.
-    if create and not credential_sharing_accepted(opts):
+    if create and not opts.get("langfuse-storage-managed") and not credential_sharing_accepted(opts):
         for label, k in [("live Neon data", "neon-r2-access-key-id"),
                          ("Langfuse events and media", "langfuse-storage-r2-access-key-id"),
                          ("backups", "langfuse-backup-r2-access-key-id")]:
@@ -336,7 +353,7 @@ def secret_errors(opts: dict, event: str) -> list[str]:
                     f"{par_name(k)} scoped to its own bucket, or set "
                     ":r2-credential-sharing: shared-accepted in colors.yml to record "
                     "that the blast radius is accepted")
-    if (create and not credential_sharing_accepted(opts)
+    if (create and not opts.get("langfuse-storage-managed") and not credential_sharing_accepted(opts)
             and _same_pair(opts, "langfuse-backup-r2-access-key-id",
                            "langfuse-storage-r2-access-key-id")):
         errors.append(

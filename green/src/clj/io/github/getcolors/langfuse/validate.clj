@@ -50,8 +50,7 @@
    :langfuse-postgres-backup-max-age-hours :langfuse-clickhouse-backup-max-age-hours
    :langfuse-media-backup-max-age-hours
    ;; public name and TLS
-   :cloudflare-zone :cloudflare-record-name :cloudflare-proxied
-   :r2-bucket :r2-endpoint])
+   :cloudflare-zone :cloudflare-record-name :cloudflare-proxied])
 
 (def image-keys [:langfuse-image :langfuse-worker-image :caddy-image :redis-image
                  :neon-image :neon-compute-image])
@@ -104,7 +103,7 @@
   [opts]
   (vec
    (concat
-    (for [k required
+    (for [k (concat required (case (:provider-backend opts) "s3" [:s3-bucket :s3-region] "r2" [:r2-bucket :r2-endpoint] []))
           :when (missing? (get opts k))]
       (str k " is required"))
 
@@ -199,15 +198,28 @@
                      (not (re-matches url-re (str (get opts k)))))]
       (str k " must be an https URL"))
 
+    (when (and (contains? opts :langfuse-storage-managed) (not (boolean? (:langfuse-storage-managed opts))))
+      [":langfuse-storage-managed must be true or false"])
+    (when (:langfuse-storage-managed opts)
+      (concat
+       (when-not (= "s3" (:langfuse-storage-provider opts)) ["managed storage requires :langfuse-storage-provider s3"])
+       (when-not (= "s3" (:provider-backend opts)) ["managed storage requires :provider-backend s3"])
+       (when-not (re-matches #"[a-z]{2}(?:-[a-z]+)+-\d+" (str (:neon-r2-region opts))) ["managed storage requires an AWS region in :neon-r2-region"])
+       (when-not (= (:neon-r2-region opts) (:langfuse-backup-r2-region opts)) ["managed storage bucket regions must match"])
+       (when-not (= 3 (count (set (map opts [:neon-r2-bucket :langfuse-s3-bucket :langfuse-backup-r2-bucket])))) ["managed storage requires three distinct application buckets"])
+       (for [k [:neon-r2-bucket :langfuse-s3-bucket :langfuse-backup-r2-bucket]
+             :when (not (re-matches #"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]" (str (get opts k))))]
+         (str k " must be a valid S3 bucket name"))))
+
     ;; --- buckets ---------------------------------------------------------------
     ;; Live data and OpenTofu state must not share a bucket: one lifecycle
     ;; mistake would take out both. Backups must share a bucket with neither.
     (for [k [:neon-r2-bucket :langfuse-s3-bucket]
           :when (and (not (missing? (get opts k)))
-                     (= (str (get opts k)) (str (:r2-bucket opts))))]
+                     (= (str (get opts k)) (str (get opts (if (= "s3" (:provider-backend opts)) :s3-bucket :r2-bucket)))))]
       (str k " must not be the OpenTofu state bucket"))
     (when (and (not (missing? (:langfuse-backup-r2-bucket opts)))
-               (contains? (hash-set (str (:r2-bucket opts)) (str (:neon-r2-bucket opts))
+               (contains? (hash-set (str (get opts (if (= "s3" (:provider-backend opts)) :s3-bucket :r2-bucket))) (str (:neon-r2-bucket opts))
                                     (str (:langfuse-s3-bucket opts)))
                           (str (:langfuse-backup-r2-bucket opts))))
       [":langfuse-backup-r2-bucket must not be the state or a live-data bucket"])
@@ -277,14 +289,14 @@
   [opts event]
   (let [create? (= :create event)
         ks (concat dns-secrets
-                   (when create? (concat storage-secrets application-secrets))
+                   (when create? (concat (when-not (:langfuse-storage-managed opts) storage-secrets) application-secrets))
                    (backend-secrets opts))]
     (concat
      (for [k (distinct ks) :when (missing? (get opts k))]
        (str "required credential is not set: " (green-cli/par-name k)))
      ;; Blast radius, enforced rather than merely observed. The shared pair
      ;; stays reachable, but only as a deliberate, committed choice.
-     (when (and create? (not (credential-sharing-accepted? opts)))
+     (when (and create? (not (:langfuse-storage-managed opts)) (not (credential-sharing-accepted? opts)))
        (for [[label k] [["live Neon data" :neon-r2-access-key-id]
                         ["Langfuse events and media" :langfuse-storage-r2-access-key-id]
                         ["backups" :langfuse-backup-r2-access-key-id]]
@@ -293,7 +305,7 @@
               (green-cli/par-name k) " scoped to its own bucket, or set "
               ":r2-credential-sharing: shared-accepted in colors.yml to record "
               "that the blast radius is accepted")))
-     (when (and create? (not (credential-sharing-accepted? opts))
+     (when (and create? (not (:langfuse-storage-managed opts)) (not (credential-sharing-accepted? opts))
                 (same-pair? opts :langfuse-backup-r2-access-key-id :langfuse-storage-r2-access-key-id))
        [(str "backups would use the same R2 credential as live data. A backup a "
              "compromised host can erase is not a backup; supply "

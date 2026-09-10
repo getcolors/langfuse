@@ -51,7 +51,6 @@ export const required = [
   "langfuse-media-backup-max-age-hours",
   // public name and TLS
   "cloudflare-zone", "cloudflare-record-name", "cloudflare-proxied",
-  "r2-bucket", "r2-endpoint",
 ];
 
 export const imageKeys = ["langfuse-image", "langfuse-worker-image", "caddy-image", "redis-image",
@@ -132,7 +131,7 @@ function clickhouseVersionOk(value: unknown): boolean {
 // created network's CIDR and the topology — which are ONCE's over `spec`.
 export function stateErrors(opts: Opts): string[] {
   const errors: string[] = [];
-  for (const key of required) {
+  for (const key of [...required, ...(opts["provider-backend"] === "s3" ? ["s3-bucket", "s3-region"] : opts["provider-backend"] === "r2" ? ["r2-bucket", "r2-endpoint"] : [])]) {
     if (missing(opts[key])) errors.push(`:${key} is required`);
   }
 
@@ -246,16 +245,27 @@ export function stateErrors(opts: Opts): string[] {
     }
   }
 
+  if ("langfuse-storage-managed" in opts && typeof opts["langfuse-storage-managed"] !== "boolean") errors.push(":langfuse-storage-managed must be true or false");
+  if (opts["langfuse-storage-managed"]) {
+    if (opts["langfuse-storage-provider"] !== "s3") errors.push("managed storage requires :langfuse-storage-provider s3");
+    if (opts["provider-backend"] !== "s3") errors.push("managed storage requires :provider-backend s3");
+    if (!/^[a-z]{2}(?:-[a-z]+)+-\d+$/.test(s(opts["neon-r2-region"]))) errors.push("managed storage requires an AWS region in :neon-r2-region");
+    if (opts["neon-r2-region"] !== opts["langfuse-backup-r2-region"]) errors.push("managed storage bucket regions must match");
+    const bucketKeys = ["neon-r2-bucket", "langfuse-s3-bucket", "langfuse-backup-r2-bucket"];
+    if (new Set(bucketKeys.map(key => opts[key])).size !== 3) errors.push("managed storage requires three distinct application buckets");
+    for (const key of bucketKeys) if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(s(opts[key]))) errors.push(`:${key} must be a valid S3 bucket name`);
+  }
+
   // --- buckets ---------------------------------------------------------------
   // Live data and OpenTofu state must not share a bucket: one lifecycle
   // mistake would take out both. Backups must share a bucket with neither.
   for (const key of ["neon-r2-bucket", "langfuse-s3-bucket"]) {
-    if (!missing(opts[key]) && s(opts[key]) === s(opts["r2-bucket"])) {
+    if (!missing(opts[key]) && s(opts[key]) === s(opts[opts["provider-backend"] === "s3" ? "s3-bucket" : "r2-bucket"])) {
       errors.push(`:${key} must not be the OpenTofu state bucket`);
     }
   }
   if (!missing(opts["langfuse-backup-r2-bucket"]) &&
-      new Set([s(opts["r2-bucket"]), s(opts["neon-r2-bucket"]), s(opts["langfuse-s3-bucket"])])
+      new Set([s(opts[opts["provider-backend"] === "s3" ? "s3-bucket" : "r2-bucket"]), s(opts["neon-r2-bucket"]), s(opts["langfuse-s3-bucket"])])
         .has(s(opts["langfuse-backup-r2-bucket"]))) {
     errors.push(":langfuse-backup-r2-bucket must not be the state or a live-data bucket");
   }
@@ -326,14 +336,14 @@ export function secretErrors(opts: Opts, event: string): string[] {
   const create = event === "create";
   const keys = [...new Set([
     ...dnsSecrets,
-    ...(create ? [...storageSecrets, ...applicationSecrets] : []),
+    ...(create ? [...(opts["langfuse-storage-managed"] ? [] : storageSecrets), ...applicationSecrets] : []),
     ...backendSecrets(opts),
   ])];
   const errors = keys.filter((key) => missing(opts[key]))
     .map((key) => `required credential is not set: ${parName(key)}`);
   // Blast radius, enforced rather than merely observed. The shared pair stays
   // reachable, but only as a deliberate, committed choice.
-  if (create && !credentialSharingAccepted(opts)) {
+  if (create && !opts["langfuse-storage-managed"] && !credentialSharingAccepted(opts)) {
     const pairs: Array<[string, string]> = [
       ["live Neon data", "neon-r2-access-key-id"],
       ["Langfuse events and media", "langfuse-storage-r2-access-key-id"],
@@ -348,7 +358,7 @@ export function secretErrors(opts: Opts, event: string): string[] {
       }
     }
   }
-  if (create && !credentialSharingAccepted(opts) &&
+  if (create && !opts["langfuse-storage-managed"] && !credentialSharingAccepted(opts) &&
       samePair(opts, "langfuse-backup-r2-access-key-id", "langfuse-storage-r2-access-key-id")) {
     errors.push("backups would use the same R2 credential as live data. A backup a " +
       "compromised host can erase is not a backup; supply " +
