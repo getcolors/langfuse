@@ -2,6 +2,7 @@
   "Opt-in deployment-owned S3 Neon, events/media, and backup buckets and bucket-scoped credentials."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
+            [clojure.walk :as walk]
             [green.cli :as cli]
             [green.process :as process]
             [green.scaffold :as scaffold]
@@ -56,8 +57,9 @@
           result))
       (catch Exception _ (assoc opts :green/exit 1 :green/err "managed S3 storage failed; inspect bucket ownership, state access, and AWS permissions")))))
 (defn credential-env [opts]
+  ;; green.tofu keywords output names only; JSON object values retain string keys.
   (reduce (fn [env [role prefix]]
-            (let [{:keys [access_key_id secret_access_key]} (get-in opts [:langfuse/storage-credentials :credentials role])]
+            (let [{:keys [access_key_id secret_access_key]} (get (walk/keywordize-keys (get-in opts [:langfuse/storage-credentials :credentials])) role)]
               (when (or (str/blank? access_key_id) (str/blank? secret_access_key))
                 (throw (ex-info "managed storage credentials unavailable" {})))
               (assoc env (str "COLORS_PAR_" prefix "_ACCESS_KEY_ID") access_key_id

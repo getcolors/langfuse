@@ -1,5 +1,7 @@
 (ns io.github.getcolors.langfuse.storage-test
   (:require [clojure.test :refer [deftest is]]
+            [clojure.java.shell :as shell]
+            [green.tofu :as tofu]
             [cheshire.core :as json]
             [green.process :as process]
             [io.github.getcolors.langfuse.storage :as storage]
@@ -55,3 +57,19 @@
 (deftest adopted-storage-does-not-provision
   (with-redefs [process/run (fn [& _] (throw (AssertionError. "adopted storage must not provision")))]
     (is (= 0 (:green/exit (storage/step base))))))
+
+(deftest sensitive-tofu-json-reaches-ansible-with-nested-string-keys
+  ;; Exercise the real SDK decoder: only the top-level output key is keywordized.
+  (let [wire (json/generate-string
+               {:credentials {:sensitive true :type ["object" {}] :value (:credentials credentials)}})
+        calls (atom [])]
+    (with-redefs [shell/sh (fn [& args]
+                            (swap! calls conj (take 3 args))
+                            {:exit 0 :out wire :err ""})]
+      (let [decoded (tofu/outputs "/unused")
+            env (storage/credential-env (assoc managed :langfuse/storage-credentials decoded))]
+        (is (contains? (:credentials decoded) "neon"))
+        (is (= "neon-id" (get env "COLORS_PAR_NEON_R2_ACCESS_KEY_ID")))
+        (is (= "data-secret" (get env "COLORS_PAR_LANGFUSE_STORAGE_R2_SECRET_ACCESS_KEY")))
+        (is (= "backup-secret" (get env "COLORS_PAR_LANGFUSE_BACKUP_R2_SECRET_ACCESS_KEY")))
+        (is (= [["tofu" "output" "-json"]] @calls))))))

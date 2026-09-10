@@ -1,4 +1,5 @@
 import {afterEach, expect, spyOn, test} from "bun:test";
+import * as tofu from "red/tofu";
 import {runtime} from "red/runtime";
 import * as storage from "../src/storage.ts";
 let mocked: ReturnType<typeof spyOn> | undefined;
@@ -28,4 +29,15 @@ test("each role receives a distinct scoped environment pair", () => {
   expect(env.COLORS_PAR_LANGFUSE_BACKUP_R2_ACCESS_KEY_ID).toBe("backup-id");
   expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
   expect(()=>storage.credentialEnv(opts)).toThrow("unavailable");
+});
+
+test("sensitive tofu JSON decodes into three scoped Ansible credential pairs", async () => {
+  const value = Object.fromEntries(["neon","data","backup"].map(role => [role,{access_key_id:role+"-id",secret_access_key:role+"-secret"}]));
+  mocked = spyOn(runtime,"exec").mockResolvedValue({exit:0,out:JSON.stringify({credentials:{sensitive:true,type:["object",{}],value}}),err:""});
+  const decoded = await tofu.outputs("/unused");
+  const env = storage.credentialEnv({...opts,"langfuse/storage-credentials":decoded});
+  expect(env.COLORS_PAR_NEON_R2_ACCESS_KEY_ID).toBe("neon-id");
+  expect(env.COLORS_PAR_LANGFUSE_STORAGE_R2_SECRET_ACCESS_KEY).toBe("data-secret");
+  expect(env.COLORS_PAR_LANGFUSE_BACKUP_R2_SECRET_ACCESS_KEY).toBe("backup-secret");
+  expect(mocked.mock.calls[0]![0]).toEqual(["tofu","output","-json"]);
 });

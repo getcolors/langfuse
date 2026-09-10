@@ -70,3 +70,16 @@ async def test_adopted_mode_never_provisions(monkeypatch):
     monkeypatch.setattr(storage.runtime, "exec", runner)
     assert (await storage.storage_step({}))['blue/exit'] == 0
     assert not runner.called
+
+
+async def test_sensitive_tofu_json_reaches_ansible(monkeypatch, capsys):
+    wire = json.dumps({"credentials": {"sensitive": True, "type": ["object", {}], "value": CREDENTIALS["credentials"]}})
+    runner = AsyncMock(return_value=result(out=wire))
+    monkeypatch.setattr(storage.runtime, "exec", runner)
+    decoded = await storage.tofu.outputs("/unused")
+    env = storage.credential_env({**OPTS, "langfuse/storage-credentials": decoded})
+    assert env["COLORS_PAR_NEON_R2_ACCESS_KEY_ID"] == "neon-id"
+    assert env["COLORS_PAR_LANGFUSE_STORAGE_R2_SECRET_ACCESS_KEY"] == "data-secret"
+    assert env["COLORS_PAR_LANGFUSE_BACKUP_R2_SECRET_ACCESS_KEY"] == "backup-secret"
+    assert runner.call_args.args[0] == ["tofu", "output", "-json"]
+    assert not capsys.readouterr().out
