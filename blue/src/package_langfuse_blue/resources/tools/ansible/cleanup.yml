@@ -43,3 +43,55 @@
       failed_when: false
     - ansible.builtin.systemd_service: {name: clickhouse-server, state: stopped}
       failed_when: false
+
+<% if langfuse-storage-managed %>
+# Owned object storage is purged next. A best-effort Compose teardown is not
+# evidence that every writer stopped: projects may be missing or renamed.
+- name: Prove every writer stopped before deleting managed storage
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Stop and verify services and every container on the dedicated hosts
+      ansible.builtin.shell: |
+        set -euo pipefail
+        stop_unit() {
+          local unit="$1" load active
+          load=$(systemctl show "$unit" --property=LoadState --value)
+          [ "$load" = "not-found" ] && return 0
+          [ "$load" = "loaded" ] || [ "$load" = "masked" ] || {
+            echo "cannot determine writer unit state: $unit" >&2; return 1;
+          }
+          systemctl stop "$unit"
+          if [ "$load" = "loaded" ]; then systemctl disable "$unit"; fi
+          active=$(systemctl show "$unit" --property=ActiveState --value)
+          case "$active" in inactive|failed) ;; *)
+            echo "writer unit remains active: $unit" >&2; return 1 ;;
+          esac
+        }
+        for base in langfuse-monitor postgres-backup media-backup neon-monitor clickhouse-backup clickhouse-monitor redis-monitor; do
+          stop_unit "$base.timer"
+          stop_unit "$base.service"
+        done
+        stop_unit clickhouse-server.service
+        if command -v docker >/dev/null 2>&1; then
+          # Capture command errors directly; a failed daemon query must never
+          # look like an empty project or an empty container list.
+          containers=$(docker ps --all --quiet)
+          if [ -n "$containers" ]; then
+            while IFS= read -r container; do
+              docker update --restart=no "$container" >/dev/null
+              docker stop --time 120 "$container" >/dev/null
+            done <<< "$containers"
+          fi
+          running=$(docker ps --quiet)
+          [ -z "$running" ] || { echo "containers remain running; refusing storage purge" >&2; exit 1; }
+        else
+          docker_load=$(systemctl show docker.service --property=LoadState --value)
+          [ "$docker_load" = "not-found" ] || { echo "cannot verify Docker writers without Docker client" >&2; exit 1; }
+        fi
+        echo "all writers stopped; managed storage can be deleted"
+      args: {executable: /bin/bash}
+      changed_when: true
+<% endif %>

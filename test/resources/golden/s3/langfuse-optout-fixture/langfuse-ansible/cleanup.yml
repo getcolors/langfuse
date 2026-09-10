@@ -43,3 +43,5 @@
       failed_when: false
     - ansible.builtin.systemd_service: {name: clickhouse-server, state: stopped}
       failed_when: false
+
+
