@@ -5,7 +5,7 @@
 #   "colors-compute-blue @ git+https://github.com/getcolors/colors-compute.git@09ec539e75dc21c4dafb019eb8f9da276e695f6f#subdirectory=blue","package-langfuse-blue", "blue"]
 #
 # [tool.uv.sources]
-# package-langfuse-blue = { git = "https://github.com/getcolors/langfuse.git", rev = "b6c9e2a137f417c6e6991170f18e57e43a7a6832", subdirectory = "blue" }
+# package-langfuse-blue = { git = "https://github.com/getcolors/langfuse.git", rev = "47658db8068fa853061561d06b66a46134b7265a", subdirectory = "blue" }
 # package-neon-blue = { git = "https://github.com/getcolors/neon.git", rev = "9f8ccc18e218ea3b6ce293a470afd61b19e81639", subdirectory = "blue" }
 # package-once-blue = { git = "https://github.com/getcolors/once.git", rev = "10e525ae7c37130ab4d532b91c8d2ead94557cc8", subdirectory = "blue" }
 # blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
