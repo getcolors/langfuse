@@ -27,7 +27,7 @@
         ;;
         ;; 87c0095 is the commit n8n-vultr verified live on 2026-09-01.
         io.github.getcolors/neon  {:git/url "https://github.com/getcolors/neon.git"
-                                   :git/sha "87c009549a928fdf1f9dc135f9740c3baa5782d7"
+                                   :git/sha "9f8ccc18e218ea3b6ce293a470afd61b19e81639"
                                    :deps/root "green"}}
  :aliases {:dev {:extra-paths ["test/clj" "test/resources"]}
            :test {:extra-paths ["test/clj" "test/resources"]

@@ -19,9 +19,15 @@ export RCLONE_CONFIG=/dev/null
 export RCLONE_CONFIG_STORE_TYPE=s3 RCLONE_CONFIG_STORE_PROVIDER=Cloudflare
 export RCLONE_CONFIG_STORE_ENDPOINT="<{ neon-r2-endpoint }>" RCLONE_CONFIG_STORE_REGION="<{ neon-r2-region }>"
 export RCLONE_CONFIG_STORE_NO_CHECK_BUCKET=true RCLONE_CONFIG_STORE_NO_HEAD=true
+case "$RCLONE_CONFIG_STORE_ENDPOINT" in
+  https://*.amazonaws.com|https://*.amazonaws.com/|https://*.amazonaws.com.cn|https://*.amazonaws.com.cn/) export RCLONE_CONFIG_STORE_PROVIDER=AWS ;;
+esac
 export RCLONE_CONFIG_BACKUP_TYPE=s3 RCLONE_CONFIG_BACKUP_PROVIDER=Cloudflare
 export RCLONE_CONFIG_BACKUP_ENDPOINT="<{ langfuse-backup-r2-endpoint }>" RCLONE_CONFIG_BACKUP_REGION="<{ langfuse-backup-r2-region }>"
 export RCLONE_CONFIG_BACKUP_NO_CHECK_BUCKET=true RCLONE_CONFIG_BACKUP_NO_HEAD=true
+case "$RCLONE_CONFIG_BACKUP_ENDPOINT" in
+  https://*.amazonaws.com|https://*.amazonaws.com/|https://*.amazonaws.com.cn|https://*.amazonaws.com.cn/) export RCLONE_CONFIG_BACKUP_PROVIDER=AWS ;;
+esac
 
 # The Langfuse storage credential, installed on the Neon host by the backups
 # play, comes first: when the deployment splits Neon data and Langfuse blobs

@@ -29,7 +29,7 @@ package-once-blue = { git = "https://github.com/getcolors/once.git", subdirector
 # equal to green/deps.edn's.
 #
 # 87c0095 is the commit n8n-vultr verified live on 2026-09-01.
-package-neon-blue = { git = "https://github.com/getcolors/neon.git", subdirectory = "blue", rev = "87c009549a928fdf1f9dc135f9740c3baa5782d7" }
+package-neon-blue = { git = "https://github.com/getcolors/neon.git", subdirectory = "blue", rev = "9f8ccc18e218ea3b6ce293a470afd61b19e81639" }
 
 # The ONCE and neon pins above carry their own, older blue pins; without this
 # override the git URLs conflict and uv refuses to resolve. The override makes

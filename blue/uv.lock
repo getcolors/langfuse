@@ -73,7 +73,7 @@ dev = [
 requires-dist = [
     { name = "blue", git = "https://github.com/getcolors/blue.git?rev=290f313ead5ca162875c33a049c880da017eae09" },
     { name = "colors-compute-blue", git = "https://github.com/getcolors/colors-compute.git?subdirectory=blue&rev=6325b24d8a7477429164c5bb0b2a0a6454fd8c42" },
-    { name = "package-neon-blue", git = "https://github.com/getcolors/neon.git?subdirectory=blue&rev=87c009549a928fdf1f9dc135f9740c3baa5782d7" },
+    { name = "package-neon-blue", git = "https://github.com/getcolors/neon.git?subdirectory=blue&rev=9f8ccc18e218ea3b6ce293a470afd61b19e81639" },
     { name = "package-once-blue", git = "https://github.com/getcolors/once.git?subdirectory=blue&rev=10e525ae7c37130ab4d532b91c8d2ead94557cc8" },
 ]
 
@@ -86,9 +86,10 @@ dev = [
 [[package]]
 name = "package-neon-blue"
 version = "0.1.0"
-source = { git = "https://github.com/getcolors/neon.git?subdirectory=blue&rev=87c009549a928fdf1f9dc135f9740c3baa5782d7#87c009549a928fdf1f9dc135f9740c3baa5782d7" }
+source = { git = "https://github.com/getcolors/neon.git?subdirectory=blue&rev=9f8ccc18e218ea3b6ce293a470afd61b19e81639#9f8ccc18e218ea3b6ce293a470afd61b19e81639" }
 dependencies = [
     { name = "blue" },
+    { name = "colors-compute-blue" },
     { name = "package-once-blue" },
 ]
 
