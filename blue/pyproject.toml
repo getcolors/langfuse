@@ -5,13 +5,13 @@ description = "Blue/Python implementation of the langfuse package"
 requires-python = ">=3.11"
 dependencies = [
     "blue",
-    "colors-compute-blue @ git+https://github.com/getcolors/colors-compute.git@09ec539e75dc21c4dafb019eb8f9da276e695f6f#subdirectory=blue",
+    "colors-compute-blue @ git+https://github.com/getcolors/colors-compute.git@ae28ea74962bb1897fa6365c143c1d43ac1fe095#subdirectory=blue",
     "package-once-blue",
     "package-neon-blue",
 ]
 
 [tool.uv.sources]
-colors-compute-blue = { git = "https://github.com/getcolors/colors-compute.git", subdirectory = "blue", rev = "09ec539e75dc21c4dafb019eb8f9da276e695f6f" }
+colors-compute-blue = { git = "https://github.com/getcolors/colors-compute.git", subdirectory = "blue", rev = "ae28ea74962bb1897fa6365c143c1d43ac1fe095" }
 blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
 # bc06f2f is where ONCE moved the machine keypair into the operator's ~/.ssh;
 # this package's SSH behaviour is that module, so the pin cannot go below it.

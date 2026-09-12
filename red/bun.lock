@@ -5,7 +5,7 @@
     "": {
       "name": "package-langfuse-red-dev",
       "dependencies": {
-        "colors-compute-red": "github:getcolors/colors-compute#09ec539e75dc21c4dafb019eb8f9da276e695f6f",
+        "colors-compute-red": "github:getcolors/colors-compute#ae28ea74962bb1897fa6365c143c1d43ac1fe095",
         "package-neon-red": "github:getcolors/neon#9f8ccc18e218ea3b6ce293a470afd61b19e81639",
         "package-once-red": "github:getcolors/once#10e525ae7c37130ab4d532b91c8d2ead94557cc8",
         "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e",
@@ -63,7 +63,7 @@
 
     "bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
 
-    "colors-compute-red": ["colors-compute-red@github:getcolors/colors-compute#09ec539", { "dependencies": { "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e" } }, "getcolors-colors-compute-09ec539", "sha512-GE9sjMPGgOvOtV49shPsTXwoNXEA8U3dwt4SAKFnZUKJsn++zEu3TZk8vAAYfIFKlVwbf2Pq8Ul2hxxH5a5Vzg=="],
+    "colors-compute-red": ["colors-compute-red@github:getcolors/colors-compute#ae28ea7", { "peerDependencies": { "red": "*" } }, "getcolors-colors-compute-ae28ea7", "sha512-AKgS7dS07pGgS2O7OhJfAu6MS0/xxJTx/WIxyfGORXbySJEI10ySThyqPYWWJu9SRcgzdFCw0DpkIVm3mWlInQ=="],
 
     "package-neon-red": ["package-neon-red@github:getcolors/neon#9f8ccc1", { "peerDependencies": { "colors-compute-red": "*", "package-once-red": "*", "red": "*" }, "optionalPeers": ["colors-compute-red", "package-once-red", "red"] }, "getcolors-neon-9f8ccc1", "sha512-T9KBHgqF0ewtp1m4yWKkc3oVb8ky1CqigO4A7b1QTF+DG9eLC9b/J08Z5lj98l9Zigweu2AQozHsXE+WmVvHOw=="],
 
@@ -76,7 +76,5 @@
     "undici-types": ["undici-types@8.3.0", "", {}, "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ=="],
 
     "zod": ["zod@4.5.4", "", {}, "sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA=="],
-
-    "colors-compute-red/red": ["red@github:getcolors/red#db9bfe6", { "dependencies": { "zod": "^4.0.0" } }, "getcolors-red-db9bfe6", "sha512-3uHKgJeICb/ljQxiTzLTLUdFNfNqvzPGv08X4LRVOU5uk7wmT7wEuVag/xhj87Qn6tvCtAG8uDp8IbIROBGmmg=="],
   }
 }
