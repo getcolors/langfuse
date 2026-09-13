@@ -141,9 +141,12 @@ must not touch `~/.ssh`.
 
 All three implementations pin the same colors-compute revision. ONCE supplies
 non-compute helpers; Neon supplies storage-tier templates. Keep the dependency
-manifests, lockfiles, and launcher metadata consistent. Red resolves compute and
-its SDK transitively through the package dependency. Green and Blue have their
-native immutable dependency declarations.
+manifests, lockfiles, and launcher metadata consistent. Red resolves compute
+through the package dependency and pins the Red SDK explicitly in the payload's
+`PINS` at the commit `red/package.json` pins, because colors-compute-red declares
+the SDK as a peer; `scripts/launcher.sh` checks they agree and builds the payload
+from an empty cache. Green and Blue have their native immutable dependency
+declarations.
 
 Use `GREEN_LIB_ROOT`, `ONCE_LIB_ROOT`, and `LANGFUSE_LIB_ROOT` for local
 package development. Neon changes require a reviewed dependency update.
